@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Build + sign Rhemion.app. Isolated from the default SwiftPM build products:
 #  - builds BOTH RhemionApp and its own rhemion-runtime into a SEPARATE scratch path, never the
 #    default .build/release;
@@ -33,15 +36,18 @@ cp "$APP_BIN" "$APP/Contents/MacOS/RhemionApp"
 # synthesized-heavy fallbacks. ATSApplicationFontsPath (Info.plist below) auto-registers them at launch.
 cp "$ROOT"/deploy/fonts/*.ttf "$APP/Contents/Resources/Fonts/"
 
-# Licenses of what ships inside the app: Rhemion (MIT), Mulish (OFL), FluidAudio (Apache-2.0) and the
+# Licenses of what ships inside the app: Rhemion (MPL 2.0), Mulish (OFL), FluidAudio (Apache-2.0) and the
 # third-party licenses FluidAudio carries. The speech model is downloaded at runtime, not bundled.
 LICENSES="$APP/Contents/Resources/Licenses"
 mkdir -p "$LICENSES"
 cp "$ROOT/LICENSE"              "$LICENSES/Rhemion-LICENSE.txt"
+cp "$ROOT/NOTICE"               "$LICENSES/Rhemion-NOTICE.txt"
+cp "$ROOT/TRADEMARK.md"         "$LICENSES/Rhemion-TRADEMARK.txt"
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$LICENSES/THIRD_PARTY_NOTICES.txt"   # About › Licenses & Notices opens this
 cp "$ROOT/deploy/fonts/OFL.txt" "$LICENSES/Mulish-OFL.txt"
 FLUID="$SCRATCH/checkouts/FluidAudio"
 cp "$FLUID/LICENSE" "$LICENSES/FluidAudio-LICENSE.txt"
-for f in "$FLUID"/ThirdPartyLicenses/*; do cp "$f" "$LICENSES/FluidAudio-$(basename "$f")"; done
+for f in "$FLUID"/ThirdPartyLicenses/*; do [ -f "$f" ] || continue; cp "$f" "$LICENSES/FluidAudio-$(basename "$f")"; done
 
 # App icon: one icon (no light/dark choice); the compiled .icns is the bundle's icon for Finder/Dock/Cmd-Tab.
 cp "$ROOT"/deploy/icons/AppIcon.icns     "$APP/Contents/Resources/AppIcon.icns"
@@ -71,6 +77,13 @@ else
   echo "WARN: $RUNTIME_SRC not found — the app needs it; the runtime build above must have failed."
 fi
 
+echo "── build rhemion-transcribe ──"
+TRANSCRIBE_BIN="$("$ROOT/deploy/build-transcribe.sh")"
+cp "$TRANSCRIBE_BIN" "$APP/Contents/Helpers/rhemion-transcribe"
+cp "$NATIVE/.transcribe/transcribe.cpp/LICENSE" "$LICENSES/transcribe.cpp-LICENSE.txt"
+cp "$NATIVE/.transcribe/transcribe.cpp/THIRD-PARTY-LICENSES.md" "$LICENSES/transcribe.cpp-THIRD-PARTY-LICENSES.md"
+echo "bundled transcribe helper"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -91,6 +104,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <!-- Bundled Mulish faces in Contents/Resources/Fonts are registered at launch (design font). -->
 
   <!-- In case macOS attributes the spawned runtime's mic use to this parent app. -->
+  <key>NSSpeechRecognitionUsageDescription</key><string>When you choose Apple Speech, Rhemion uses the recognition built into macOS, on your Mac.</string>
   <key>NSMicrophoneUsageDescription</key><string>Rhemion transcribes your speech locally; audio never leaves your Mac.</string>
 </dict>
 </plist>
@@ -101,8 +115,20 @@ PLIST
 if [ -x "$APP/Contents/Helpers/rhemion-runtime" ]; then
   codesign --force --sign "$IDENTITY" --identifier "$RUNTIME_ID" "$APP/Contents/Helpers/rhemion-runtime"
 fi
+codesign --force --sign "$IDENTITY" --identifier "com.sageathor.rhemion.transcribe" "$APP/Contents/Helpers/rhemion-transcribe"
 codesign --force --sign "$IDENTITY" --identifier "$APP_ID" "$APP"
 
 echo "── signature ──"
 codesign -dv --verbose=2 "$APP" 2>&1 | grep -iE "Identifier=|Authority=" | sed 's/^/  /'
 echo "built $APP (CFBundleVersion=$BUILD)"
+
+# Restart Rhemion on the new build, so what was just built is what runs. Quits the running copy politely, waits
+# for it to close, then opens this app. RHEMION_NO_RELAUNCH=1 skips it (release packaging, tests).
+if [ "${RHEMION_NO_RELAUNCH:-0}" != "1" ]; then
+  if pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; then
+    osascript -e "tell application id \"$APP_ID\" to quit" >/dev/null 2>&1 || true
+    for _ in $(seq 1 50); do pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 || break; sleep 0.2; done
+    pkill -f "$APP/Contents/MacOS/" 2>/dev/null || true
+  fi
+  open "$APP" && echo "restarted Rhemion"
+fi

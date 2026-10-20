@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Launch-at-login — thin wrapper over SMAppService.mainApp (macOS 13+; the package targets
 // macOS 26, so no availability guard is needed). The saved preference (AppSettings.launchAtLogin,
 // key `general_launch_at_login`, default on) is the source of truth; `reconcile` brings the macOS

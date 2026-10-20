@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// Streaming WAV writer for 16 kHz mono signed-16-bit PCM. Writes a placeholder 44-byte

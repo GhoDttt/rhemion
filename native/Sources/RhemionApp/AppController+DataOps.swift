@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // AppController's storage operations: Clear Data, deleting exported transcripts, Uninstall and the restart
 // after a settings reset (moved out of main.swift unchanged).
 
@@ -199,6 +202,23 @@ extension AppController {
     /// partial uninstall never resumes — the app may already be half-removed; Done quits).
     /// `settingsWriteSuppressed` flips right after the barrier when app data is going —
     /// settings.json is about to be deleted and must not be resurrected by an in-memory save.
+    /// Apple Speech's language packs are held by macOS for the runtime (a reservation per language); with Rhemion
+    /// gone nobody would give them back. The runtime executable releases them in a short run of its own.
+    nonisolated static func releaseSpeechPacks() async {
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/rhemion-runtime")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else { return }
+        await Task.detached {
+            let p = Process()
+            p.executableURL = helper
+            p.arguments = ["--release-speech-packs"]
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return }
+            let deadline = Date().addingTimeInterval(25)
+            while p.isRunning && Date() < deadline { usleep(100_000) }
+            if p.isRunning { p.terminate() }
+        }.value
+    }
+
     func runUninstall(_ o: UninstallOptions, progress: @escaping @MainActor (Int) -> Void) async -> OperationReport {
         guard !dataOps.inProgress else { return Self.busyReport() }
         progress(0)
@@ -212,6 +232,7 @@ extension AppController {
         report.dryRun = dryRun
         progress(1); do { try await effects.unregisterLoginItem() } catch { report.failures.append("Login item: \(error.localizedDescription)") }
         progress(2); do { try await effects.resetPrivacy() } catch { report.failures.append("Permissions: \(error.localizedDescription)") }
+        if !dryRun { await Self.releaseSpeechPacks() }
         progress(3)
         let layout = AppPaths.storageLayout(settings: settings)
         if o.export && !dryRun { readoptExports(layout) }

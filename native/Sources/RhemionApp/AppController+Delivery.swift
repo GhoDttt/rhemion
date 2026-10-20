@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // AppController's delivery paths outside a fresh dictation: the double-Esc gesture (cancel or erase), the pinned
 // window's "insert there, come back", Insert again from the Journal, Recall, and the purge of expired canceled
 // entries (moved out of main.swift unchanged).

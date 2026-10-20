@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // DataOperations — the `quiesce` barrier every destructive storage action (export, history
 // delete, clear data, export deletion, uninstall) starts with: block new input, discard an active
 // take without inserting text, cancel a model download in flight, drop late runtime events, stop the

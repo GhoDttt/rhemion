@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import FluidAudio
 import Foundation
 import RhemionASR
@@ -32,7 +35,13 @@ public actor RuntimeService {
     /// FluidAudio's download. `replace()` true re-downloads files already on disk (a damaged model) instead
     /// of keeping them.
     public static func fluidDownloader(replace: @escaping @Sendable () -> Bool) -> ModelDownloader {
-        { version, progress in try await AsrModels.download(force: replace(), version: version, progressHandler: progress) }
+        { version, progress in
+            // The runtime keeps FluidAudio offline (ParakeetModelHost) so dictation never reaches the network.
+            // An explicit Download is the one exception: lift the switch for this download only.
+            ModelHub.offlineMode = false
+            defer { ModelHub.offlineMode = true }
+            return try await AsrModels.download(force: replace(), version: version, progressHandler: progress)
+        }
     }
 
     private let modelDownloader: ModelDownloader
@@ -58,6 +67,9 @@ public actor RuntimeService {
     /// Enumerates the pickable models + microphones for a `.listDevices` request. Injected (not called
     /// directly) so RuntimeService stays free of the ASR/CoreAudio stacks and remains unit-testable.
     private let devicesProvider: (@Sendable () -> (models: [ModelOption], mics: [MicOption]))?
+    /// Prepares the model the user switched to and frees the previous one (`.useModel`). Injected like
+    /// `devicesProvider`; returns when the model is ready (or could not be prepared).
+    private let modelUser: (@Sendable (_ id: String) async -> Void)?
     private let now: @Sendable () -> Double
     /// How long the detached delivery task waits for the client's `deliver-result` ack before
     /// finalizing the history row as not-delivered (`no-ack`). Injectable so tests can drive both
@@ -102,6 +114,7 @@ public actor RuntimeService {
         history: HistorySink? = nil,
         contextProvider: (@Sendable (_ targetPid: Int?) -> HistoryApplication?)? = nil,
         devicesProvider: (@Sendable () -> (models: [ModelOption], mics: [MicOption]))? = nil,
+        modelUser: (@Sendable (_ id: String) async -> Void)? = nil,
         modelDownloader: @escaping ModelDownloader = { version, progress in
             try await AsrModels.download(version: version, progressHandler: progress)
         },
@@ -118,6 +131,7 @@ public actor RuntimeService {
         self.history = history
         self.contextProvider = contextProvider
         self.devicesProvider = devicesProvider
+        self.modelUser = modelUser
         self.deliveryResultTimeout = deliveryResultTimeout
         self.speechCheck = speechCheck
         self.now = now
@@ -377,6 +391,15 @@ public actor RuntimeService {
                 startModelDownload(id: id, reply: reply)
             case .cancelModelDownload:
                 modelDownloadTask?.cancel()
+            case .useModel(let id):
+                // Off the actor's queue: preparing can take seconds (minutes on a first compile) and must not
+                // hold up dictation commands. The report that follows carries the model's warm state.
+                guard let modelUser else { break }
+                Task {
+                    await modelUser(id)
+                    let devices = self.devicesProvider?() ?? (models: [], mics: [])
+                    self.emit(.devices(models: devices.models, mics: devices.mics), to: reply)
+                }
             case .listDevices:
                 // Answer from the runtime's own enumeration (the same source that actually selects the
                 // engine/device), so the app's pickers never drift from selection reality. Fast +
@@ -388,6 +411,8 @@ public actor RuntimeService {
     }
 
     private func startModelDownload(id: String, reply: LineSink) {
+        if id == AppleSpeech.modelID { startApplePack(reply: reply); return }
+        if let file = ModelCatalog.model(id: id)?.download { startFileDownload(id: id, file: file, reply: reply); return }
         guard let version = ModelRegistry.parakeetVersion(id: id) else {
             emit(.modelDownload(id: id, state: "failed", fraction: nil,
                                 error: "unknown or non-downloadable model"), to: reply)
@@ -430,6 +455,54 @@ public actor RuntimeService {
             } else {
                 self.emit(terminal, to: reply)
             }
+            self.modelDownloadTask = nil
+        }
+    }
+
+    /// A Whisper model from the catalogue, into the Whisper folder the registry scans. The app restarts the runtime
+    /// afterwards (as for Parakeet), which finds it there.
+    private func startFileDownload(id: String, file: CatalogModel.Download, reply: LineSink) {
+        guard modelDownloadTask == nil, let url = URL(string: file.url) else { return }
+        let destination = URL(fileURLWithPath: (ModelRegistry.defaultWhisperDir as NSString).expandingTildeInPath)
+            .appendingPathComponent(file.fileName)
+        modelDownloadTask = Task {
+            let terminal: Event
+            do {
+                try await FileDownload.fetch(url, sha256: file.sha256, to: destination) { fraction in
+                    Task { await self.emit(.modelDownload(id: id, state: "downloading", fraction: fraction, error: nil), to: reply) }
+                }
+                try Task.checkCancellation()
+                terminal = .modelDownload(id: id, state: "done", fraction: 1.0, error: nil)
+            } catch {
+                terminal = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+                    ? .modelDownload(id: id, state: "canceled", fraction: nil, error: nil)
+                    : .modelDownload(id: id, state: "failed", fraction: nil, error: String(describing: error))
+            }
+            self.emit(terminal, to: reply)
+            self.modelDownloadTask = nil
+        }
+    }
+
+    /// Apple Speech: ask macOS for the pack of the language it will listen for. macOS keeps packs per program, so
+    /// the runtime (which recognises) asks for its own; one the app fetched would not count here.
+    private func startApplePack(reply: LineSink) {
+        let id = AppleSpeech.modelID
+        guard modelDownloadTask == nil else { return }
+        modelDownloadTask = Task {
+            let code = await AppleSpeech.language(for: SettingsSnapshot.load().languages)
+            let terminal: Event
+            do {
+                guard try await AppleSpeech.install(code, progress: { fraction in
+                    Task { await self.emit(.modelDownload(id: id, state: "downloading", fraction: fraction, error: nil), to: reply) }
+                }) else { throw AppleSpeechError.unsupported(code) }
+                try Task.checkCancellation()
+                terminal = .modelDownload(id: id, state: "done", fraction: 1.0, error: nil)
+            } catch {
+                terminal = Task.isCancelled || error is CancellationError
+                    ? .modelDownload(id: id, state: "canceled", fraction: nil, error: nil)
+                    : .modelDownload(id: id, state: "failed", fraction: nil, error: String(describing: error))
+            }
+            self.emit(terminal, to: reply)
             self.modelDownloadTask = nil
         }
     }

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Settings — the app owns the config. There is no source note: the app reads and writes the
 // snapshot directly. That snapshot is the single store — `$RHEMION_RUNTIME_DIR/active/settings.json`
 // (default: ~/.local/state/rhemion-v3/active/settings.json) — the SAME file the runtime reads via
@@ -10,12 +13,19 @@
 // RHEMION_DATA_DIR env, which wins over any snapshot value (RuntimePaths.dataDirectory).
 
 import Foundation
+import RhemionCore
 import AppKit
 
 struct AppSettings: Equatable, Sendable {
     // Recognition — the runtime reads these (SettingsSnapshot). Only `language` is in the UI so far.
-    var model: String = "parakeet-v3"
+    var model: String = ModelCatalog.defaultID
     var language: String = "auto"                 // auto | ru | en                      (UI)
+    // 3.2: the languages the user dictates in (ISO 639-1, their order). Picks and sorts the models in Settings ›
+    // Models. First run: the Mac's own languages, with the old Recognition language first (`defaultLanguages`).
+    var dictationLanguages: [String] = []          // (UI: Models › Languages)
+    // 3.2: Recognition (Models): false = Automatic, every language the model knows (default); true = limit to the
+    // languages as far as the model can (Parakeet: their one alphabet; Whisper: the one language).
+    var recognitionLimit: Bool = false             // (UI: Models › Recognition)
     var audioMicrophone: String = "auto"
     var whisperBinary: String = ""                // empty = the runtime looks for Homebrew's whisper-cli
     var modelDirs: String = ""
@@ -27,7 +37,8 @@ struct AppSettings: Equatable, Sendable {
     var indicatorStyle: String = "auto"            // auto | notch | floating  (recording indicator)  (UI)
     var exportMode: String = "off"                 // auto | manual | scheduled | off     (UI)
     var exportSchedule: String = "daily"           // hourly | daily | weekly             (UI, scheduled only)
-    var theme: String = "system"
+    var theme: String = "system"                  // system | light | dark: the appearance       (UI)
+    var themeFamily: String = "rhemion"           // ThemeFamily.id: the look                    (UI)
     var exportInitialized: Bool = false
     // Journal auto-cleanup (UI: stepper + unit). 0 = keep forever. Audio expiry removes only the WAV;
     // transcript expiry removes the whole entry (record + audio + exported line).
@@ -41,6 +52,7 @@ struct AppSettings: Equatable, Sendable {
     var keepCanceledHours: Int = 24                // (UI: stepper)
 
     @MainActor func applyAppearance() {
+        ThemeStore.shared.family = ThemeFamily.named(themeFamily)
         NSApp.appearance = theme == "light" ? NSAppearance(named: .aqua)
             : theme == "dark" ? NSAppearance(named: .darkAqua) : nil
     }
@@ -85,9 +97,27 @@ struct AppSettings: Equatable, Sendable {
 
     // Allowed sets (also the UI option lists).
     static let languageOptions     = ["auto", "ru", "en"]
+
+    /// The first-run language list: the Mac's preferred languages (known ones, in order), with the old Recognition
+    /// language first when it named one; English when nothing else is known.
+    static func defaultLanguages(recognition: String, preferred: [String] = Locale.preferredLanguages) -> [String] {
+        var out: [String] = []
+        if recognition != "auto" { out.append(recognition) }
+        for id in preferred {
+            let code = Locale(identifier: id).language.languageCode?.identifier ?? ""
+            if ModelCatalog.allLanguages.contains(code), !out.contains(code) { out.append(code) }
+        }
+        return out.isEmpty ? ["en"] : out
+    }
     static let inputMethodOptions  = ["direct", "clipboard"]
+    /// Every key the dictation tap understands (a settings file may name any of them).
     static let pttKeyOptions       = ["right_option", "left_option", "right_cmd", "left_cmd",
                                       "right_control", "left_control", "right_shift", "left_shift", "fn"]
+    /// The keys Settings offers: rarely part of typing. Shift starts a take with every capital,
+    /// Left Command with ⌘C, Control with Terminal shortcuts, and Right Control is missing on Apple keyboards. Fn stays
+    /// (MacBook keyboards, and what other dictation apps use), with a note while the Globe key has a system action.
+    /// A key chosen before stays, shown in its row.
+    static let pttKeyOffered       = ["right_cmd", "right_option", "left_option", "fn"]
     static let exportModeOptions   = ["auto", "manual", "scheduled", "off"]
     static let exportScheduleOptions = ["hourly", "daily", "weekly"]
     static let retentionUnitOptions  = ["days", "weeks", "months"]
@@ -108,6 +138,7 @@ enum SettingsStore {
         s.exportMode = oneof(object["export_mode"], s.exportMode, AppSettings.exportModeOptions)
         s.exportSchedule = oneof(object["export_schedule"], s.exportSchedule, AppSettings.exportScheduleOptions)
         s.theme = oneof(object["theme"], s.theme, ["system", "light", "dark"])
+        s.themeFamily = oneof(object["theme_family"], s.themeFamily, ThemeFamily.all.map(\.id))
         s.indicatorStyle = oneof(object["indicator_style"], s.indicatorStyle, ["auto", "notch", "floating"])
         s.exportInitialized = object["export_initialized"] as? Bool ?? false
         s.audioRetentionValue      = num(object["history_audio_retention_value"], s.audioRetentionValue)
@@ -118,6 +149,17 @@ enum SettingsStore {
         s.transcriptRetentionUnit  = oneof(object["history_transcript_retention_unit"], s.transcriptRetentionUnit, AppSettings.retentionUnitOptions)
         s.model                     = str(object["model"], s.model)
         s.language                  = oneof(object["language"], s.language, AppSettings.languageOptions)
+        let langs = (object["languages"] as? [String] ?? []).filter { ModelCatalog.allLanguages.contains($0) }
+        if !langs.isEmpty {
+            s.dictationLanguages = langs
+            s.recognitionLimit = (object["recognition"] as? String) == "limit"
+        } else if s.language != "auto" {
+            // From before 3.2: Russian or English was a deliberate strict choice; it stays one.
+            s.dictationLanguages = [s.language]
+            s.recognitionLimit = true
+        } else {
+            s.dictationLanguages = AppSettings.defaultLanguages(recognition: s.language)
+        }
         s.audioMicrophone           = str(object["audio_microphone"], s.audioMicrophone)
         s.whisperBinary             = str(object["whisper_binary"], s.whisperBinary)
         s.modelDirs                 = str(object["model_dirs"], s.modelDirs)
@@ -170,6 +212,7 @@ enum SettingsStore {
         object["export_mode"] = s.exportMode
         object["export_schedule"] = s.exportSchedule
         object["theme"] = s.theme
+        object["theme_family"] = s.themeFamily
         object["indicator_style"] = s.indicatorStyle
         object["history_audio_retention_value"]      = s.audioRetentionValue
         object["journal_keep_canceled"]              = s.keepCanceled
@@ -178,7 +221,11 @@ enum SettingsStore {
         object["history_transcript_retention_value"] = s.transcriptRetentionValue
         object["history_transcript_retention_unit"]  = s.transcriptRetentionUnit
         object["model"]                        = s.model
-        object["language"]                     = s.language
+        // Legacy mirror for builds before 3.2 (Auto / Russian / English): a limit to one of those two, else auto.
+        object["language"]                     = s.recognitionLimit && s.dictationLanguages.count == 1
+                                                 && ["ru", "en"].contains(s.dictationLanguages[0]) ? s.dictationLanguages[0] : "auto"
+        object["languages"]                    = s.dictationLanguages
+        object["recognition"]                  = s.recognitionLimit ? "limit" : "auto"
         object["audio_microphone"]             = s.audioMicrophone
         object["whisper_binary"]               = s.whisperBinary
         object["model_dirs"]                   = s.modelDirs

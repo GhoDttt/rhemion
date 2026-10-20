@@ -1,5 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import AppKit
 import AVFoundation
+import RhemionStorage
 import SwiftUI
 
 // The Journal lives inside the hub: HubModel owns a JournalModel and the hub renders JournalView.
@@ -8,7 +12,39 @@ import SwiftUI
 
 @MainActor
 final class JournalModel: ObservableObject {
-    @Published var doc = JournalDoc(entries: [], skippedLines: 0, unreadableFiles: 0)
+    @Published var doc = JournalDoc(entries: [], skippedLines: 0, unreadableFiles: 0) { didSet { refilter() } }
+    /// What the list shows for the current search and grouping: worked out once per change, off the main thread.
+    /// (Filtering and grouping every entry on each redraw, a hover included, froze the window on a long journal.)
+    @Published private(set) var shown: [JournalEntry] = []
+    @Published private(set) var shownGroups: [JournalGroup] = []
+    /// The search `shown` answers (it lags the field while a search is being worked out).
+    @Published private(set) var shownQuery = ""
+    /// Bumped whenever `shown` changes: cheaper to watch than the list itself.
+    @Published private(set) var shownVersion = 0
+    private var filterQuery = "", filterGrouping = JournalGrouping.monthWeekDay
+    private var filterTask: Task<Void, Never>?
+    func show(query: String, grouping: JournalGrouping) {
+        guard query != filterQuery || grouping != filterGrouping else { return }
+        let typing = query != filterQuery && !query.isEmpty
+        filterQuery = query; filterGrouping = grouping
+        refilter(after: typing ? 0.12 : 0)
+    }
+    private func refilter(after delay: Double = 0) {
+        filterTask?.cancel()
+        let entries = doc.entries, query = filterQuery, grouping = filterGrouping
+        filterTask = Task {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled else { return }
+            let (hits, groups) = await Task.detached(priority: .userInitiated) {
+                let hits = query.isEmpty ? entries : entries.filter { e in
+                    [e.transcript, e.clean, e.raw, e.appName ?? ""].contains { $0.localizedStandardContains(query) }
+                }
+                return (hits, query.isEmpty && grouping != .flat ? JournalDoc.groups(hits, by: grouping) : [])
+            }.value
+            guard !Task.isCancelled else { return }
+            shown = hits; shownGroups = groups; shownQuery = query; shownVersion += 1
+        }
+    }
     @Published var loading = false
     enum InsertAgainOutcome { case inserted, fieldGone, failed }
     /// 3.1 Insert again, wired by the AppController: whether this entry can be put back (its press-time target
@@ -79,7 +115,14 @@ final class JournalModel: ObservableObject {
         guard refresh == nil else { reloadPending = true; return }
         loading = true
         refresh = Task {
-            doc = await Task.detached(priority: .userInitiated) { JournalDoc.load() }.value
+            let loaded = await Task.detached(priority: .userInitiated) { JournalDoc.load() }.value
+            doc = loaded
+            // Marks of entries that are gone (deleted, expired) go too, once every month was read whole.
+            if loaded.unreadableFiles == 0 && loaded.skippedLines == 0 {
+                let ids = Set(loaded.entries.map(\.id)), sessions = Set(loaded.entries.compactMap(\.session))
+                if !insertedAgain.isSubset(of: ids) { insertedAgain.formIntersection(ids); InsertedAgainStore.save(insertedAgain) }
+                Task.detached(priority: .utility) { JournalMarks.keep(sessions: sessions) }
+            }
             loading = false
             refresh = nil
             if reloadPending { reloadPending = false; reload() }
@@ -91,30 +134,44 @@ final class JournalModel: ObservableObject {
 /// in `<stateDir>/journal-marks.json`. Written from any thread; small, read-modify-write under a lock.
 enum JournalMarks {
     private static let lock = NSLock()
-    private static var url: URL { AppPaths.stateDir.appendingPathComponent("journal-marks.json") }
+    private static var url: URL { AppPaths.stateDir.appendingPathComponent(StorageLayout.journalMarkFiles[0]) }
     private nonisolated(unsafe) static var cache: [String: String]?
+    /// Marked in this run: the runtime may not have journaled that take yet, so it is never pruned.
+    private nonisolated(unsafe) static var fresh = Set<String>()
     private static func load() -> [String: String] {
-        if let cache { return cache }
+        // Clear Data › Journal removes the file: a cache kept past that would write the old marks back.
+        if let cache, cache.isEmpty || FileManager.default.fileExists(atPath: url.path) { return cache }
         let m = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
         cache = m; return m
+    }
+    private static func save(_ m: [String: String]) {
+        cache = m
+        do { try JSONEncoder().encode(m).write(to: url, options: .atomic) }
+        catch { log("journal marks not saved: \(error.localizedDescription)") }
     }
     static func mark(session: String) -> String? { lock.lock(); defer { lock.unlock() }; return load()[session] }
     static func add(session: String, mark: String) {
         lock.lock(); defer { lock.unlock() }
-        var m = load(); m[session] = mark; cache = m
-        if let data = try? JSONEncoder().encode(m) { try? data.write(to: url, options: .atomic) }
+        var m = load(); m[session] = mark; fresh.insert(session); save(m)
+    }
+    /// Forget the marks of sessions no entry has any more (deleted, expired).
+    static func keep(sessions: Set<String>) {
+        lock.lock(); defer { lock.unlock() }
+        let m = load(), kept = m.filter { sessions.contains($0.key) || fresh.contains($0.key) }
+        if kept.count != m.count { save(kept) }
     }
 }
 
 /// Entry ids put back with Insert again, in `<stateDir>/journal-inserted-again.json`.
 enum InsertedAgainStore {
-    private static var url: URL { AppPaths.stateDir.appendingPathComponent("journal-inserted-again.json") }
+    private static var url: URL { AppPaths.stateDir.appendingPathComponent(StorageLayout.journalMarkFiles[1]) }
     static func load() -> Set<String> {
         guard let data = try? Data(contentsOf: url), let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
         return Set(ids)
     }
     static func save(_ ids: Set<String>) {
-        if let data = try? JSONEncoder().encode(ids.sorted()) { try? data.write(to: url, options: .atomic) }
+        do { try JSONEncoder().encode(ids.sorted()).write(to: url, options: .atomic) }
+        catch { log("journal marks not saved: \(error.localizedDescription)") }
     }
 }
 
@@ -171,39 +228,6 @@ extension JournalEntry.Status {
     }
 }
 
-private extension Color {
-    init(journalHex hex: UInt32) {
-        self.init(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
-    }
-}
-private enum JournalStyle {
-    static let gold = Color(journalHex: 0xE0A42E)
-    static func text(_ dark: Bool) -> Color { Color(journalHex: dark ? 0xE8E8EC : 0x1D1D1F) }
-    static func secondary(_ dark: Bool) -> Color { Color(journalHex: dark ? 0xA8A8AE : 0x5F5F66) }
-    static func tertiary(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x909098 : 0x9A9AA1) }
-    static func sidebar(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x242426 : 0xF5F5F7) }
-    static func content(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x1E1E20 : 0xFFFFFF) }
-    static func win(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x232326 : 0xFFFFFF) }        // raised surface (--win)
-    static func line(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x37373B : 0xE5E5E9) }
-    static func line2(_ dark: Bool) -> Color { Color(journalHex: dark ? 0x2C2C30 : 0xEFEFF2) }       // hover fill (--line2)
-    static func selected(_ dark: Bool) -> Color { dark ? gold.opacity(0.20) : Color(journalHex: 0xF6DD84) }
-    static func cbBorder(_ dark: Bool) -> Color { dark ? Color.white.opacity(0.28) : Color.black.opacity(0.24) }
-    static func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        // Use the EXACT bundled Mulish face for each weight (no SwiftUI weight synthesis, which rendered
-        // heavier than the design). Falls back to the native macOS font if the face isn't registered.
-        let face: String
-        switch weight {
-        case .heavy, .black: face = "Mulish-ExtraBold"
-        case .bold: face = "Mulish-Bold"
-        case .semibold: face = "Mulish-SemiBold"
-        case .medium: face = "Mulish-Medium"
-        case .light, .ultraLight, .thin: face = "Mulish-Light"
-        default: face = "Mulish-Regular"
-        }
-        return NSFont(name: face, size: size) == nil ? .system(size: size, weight: weight) : .custom(face, size: size)
-    }
-}
-
 struct JournalView: View {
     @ObservedObject var model: JournalModel
     let client: RuntimeClient
@@ -228,13 +252,9 @@ struct JournalView: View {
     @State private var exporting = false
     @State private var groupAnchor: CGRect = .zero
     private var dark: Bool { scheme == .dark }
-    private var search: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var entries: [JournalEntry] {
-        guard !search.isEmpty else { return model.doc.entries }
-        return model.doc.entries.filter { entry in
-            [entry.transcript, entry.clean, entry.raw, entry.appName ?? ""].contains { $0.localizedStandardContains(search) }
-        }
-    }
+    /// The search the list currently answers (see JournalModel.shown).
+    private var search: String { model.shownQuery }
+    private var entries: [JournalEntry] { model.shown }
     private var selected: JournalEntry? { entries.first { $0.id == opened } }
     // Flatten the tree: only day sections pin, while month/week headers scroll away.
     private func visibleGroups(_ groups: [JournalGroup]) -> [JournalGroup] {
@@ -249,7 +269,7 @@ struct JournalView: View {
                 HStack(spacing: 0) {
                     list.frame(width: details ? min(listWidth, max(280, geometry.size.width - 385)) : nil).frame(maxWidth: details ? nil : .infinity, maxHeight: .infinity)
                     if details {
-                        Rectangle().fill(JournalStyle.line(dark)).frame(width: 5)
+                        Rectangle().fill(RhemionStyle.line(dark)).frame(width: 5)
                             .onHover { if $0 { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
                             .gesture(DragGesture().onChanged { value in
                                 if dragWidth == nil { dragWidth = listWidth }
@@ -258,18 +278,18 @@ struct JournalView: View {
                             }.onEnded { _ in dragWidth = nil })
                         Group {
                             if let selected { JournalDetail(entry: selected, model: model, notify: notify, delete: { requestDelete([selected.id]) }, deleting: deleting).id(selected.id) }
-                            else { Text("Select an entry").foregroundStyle(JournalStyle.secondary(dark)).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                        }.frame(minWidth: 290, maxWidth: .infinity, maxHeight: .infinity).background(JournalStyle.content(dark))
+                            else { Text("Select an entry").foregroundStyle(RhemionStyle.secondary(dark)).frame(maxWidth: .infinity, maxHeight: .infinity) }
+                        }.frame(minWidth: 290, maxWidth: .infinity, maxHeight: .infinity).background(RhemionStyle.content(dark))
                     }
                 }
             }
             if model.doc.skippedLines > 0 || model.doc.unreadableFiles > 0 {
                 Text("Skipped malformed lines: \(model.doc.skippedLines) · Unreadable files: \(model.doc.unreadableFiles)")
-                    .font(.caption).foregroundStyle(JournalStyle.secondary(dark)).padding(6)
+                    .font(.caption).foregroundStyle(RhemionStyle.secondary(dark)).padding(6)
             }
         }.frame(minWidth: 860, idealWidth: 1000, minHeight: 440, idealHeight: 640)
-            .font(JournalStyle.font(13)).foregroundStyle(JournalStyle.text(dark))
-            .background(JournalStyle.sidebar(dark)).tint(JournalStyle.gold).buttonStyle(.plain)
+            .font(RhemionStyle.font(13)).foregroundStyle(RhemionStyle.text(dark))
+            .background(RhemionStyle.rail(dark)).tint(RhemionStyle.gold).buttonStyle(.plain)
             .coordinateSpace(name: "journalRoot")
             .onPreferenceChange(MenuAnchorKey.self) { groupAnchor = $0 }
             .overlay { groupingMenu }
@@ -278,7 +298,7 @@ struct JournalView: View {
             }
             .overlay(alignment: .bottom) {
                 if let toast {
-                    Text(toast).font(JournalStyle.font(12)).padding(12)
+                    Text(toast).font(RhemionStyle.font(12)).padding(12)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9)).padding(20).allowsHitTesting(false)
                 }
             }
@@ -288,10 +308,13 @@ struct JournalView: View {
             } message: {
                 Text("This also removes them from the exported note.")
             }
-            .onChange(of: entries, initial: true) { _, values in
+            .onChange(of: model.shownVersion, initial: true) {
+                let values = model.shown
                 if !values.contains(where: { $0.id == opened }) { opened = values.first?.id }
                 checked.formIntersection(Set(values.map(\.id)))
             }
+            .onChange(of: query, initial: true) { model.show(query: query.trimmingCharacters(in: .whitespacesAndNewlines), grouping: grouping) }
+            .onChange(of: grouping) { model.show(query: query.trimmingCharacters(in: .whitespacesAndNewlines), grouping: grouping) }
     }
     // Custom dropdown drawn at the window root: no popover arrow, hangs directly under the trigger.
     // A full-window catcher dismisses on any outside click; the card sits above it.
@@ -311,25 +334,21 @@ struct JournalView: View {
     }
     private var toolbar: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(JournalStyle.secondary(dark))
-                TextField("Search the journal", text: $query).textFieldStyle(.plain)
-                if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.help("Clear search") }
-            }.padding(7).frame(minWidth: 130, maxWidth: 250).background(JournalStyle.content(dark), in: RoundedRectangle(cornerRadius: 7))
+            SearchField(text: $query, placeholder: "Search the journal", style: .toolbar)
             Button { groupMenu.toggle() } label: {
                 HStack { Text(grouping.rawValue); Image(systemName: "chevron.down").font(.caption2) }.padding(7)
-            }.background(JournalStyle.content(dark), in: RoundedRectangle(cornerRadius: 7))
+            }.background(RhemionStyle.content(dark), in: RoundedRectangle(cornerRadius: 7))
                 // Capture the trigger's frame so the custom dropdown (no arrow, drawn at the window root) hangs under it.
                 .background(GeometryReader { g in Color.clear.preference(key: MenuAnchorKey.self, value: g.frame(in: .named("journalRoot"))) })
             ViewModeToggle(compact: $compact)   // choose one of two views (comfortable / compact), not on/off
-            Text("\(entries.count) \(search.isEmpty ? "entries" : "found")").font(JournalStyle.font(11)).foregroundStyle(JournalStyle.tertiary(dark)).fixedSize()
+            Text("\(entries.count) \(search.isEmpty ? "entries" : "found")").font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.tertiary(dark)).fixedSize()
             Spacer(minLength: 0)
             // The export chip + "Export now" action vanish entirely when export is turned Off in settings.
             if exportMode != "off" {
                 HStack(spacing: 5) {
                     Circle().fill(RhemionStyle.success).frame(width: 6, height: 6)
                     Text("Export: \(exportMode)")
-                }.font(JournalStyle.font(11)).padding(7).background(JournalStyle.content(dark), in: RoundedRectangle(cornerRadius: 7))
+                }.font(RhemionStyle.font(11)).padding(7).background(RhemionStyle.content(dark), in: RoundedRectangle(cornerRadius: 7))
                     .help("Current export mode")
                 JournalToolbarAction(systemImage: "arrow.up.to.line", help: "Export now to the vault note", busy: exporting) {
                     exporting = true
@@ -343,7 +362,7 @@ struct JournalView: View {
             }
             JournalToolbarToggle(systemImage: details ? "sidebar.right" : "rectangle", on: details,
                                  help: details ? "Hide details" : "Show details") { details.toggle() }
-        }.font(JournalStyle.font(12, .semibold)).padding(10)
+        }.font(RhemionStyle.font(12, .semibold)).padding(10)
     }
     private var selectionBar: some View {
         HStack(spacing: 12) {
@@ -352,7 +371,7 @@ struct JournalView: View {
             Button("Clear") { checked.removeAll() }
             Spacer()
             Button("Delete") { requestDelete(checked) }.foregroundStyle(RhemionStyle.danger).disabled(deleting)
-        }.font(JournalStyle.font(12, .semibold)).padding(10).background(JournalStyle.gold.opacity(0.12))
+        }.font(RhemionStyle.font(12, .semibold)).padding(10).background(RhemionStyle.theme(dark).noticeWash)
     }
     private var list: some View {
         ScrollView {
@@ -360,18 +379,18 @@ struct JournalView: View {
                 if entries.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "text.book.closed").font(.title)
-                        Text(model.loading ? "Loading…" : search.isEmpty ? "No entries yet" : "No matches")
-                    }.foregroundStyle(JournalStyle.secondary(dark)).padding(.vertical, 70).frame(maxWidth: .infinity)
-                } else if !search.isEmpty || grouping == .flat { rows(entries) }
+                        Text(model.loading || model.shownVersion == 0 ? "Loading…" : search.isEmpty ? "No entries yet" : "No matches")
+                    }.foregroundStyle(RhemionStyle.secondary(dark)).padding(.vertical, 70).frame(maxWidth: .infinity)
+                } else if model.shownGroups.isEmpty { rows(entries) }   // a search, or No grouping
                 else {
-                    ForEach(visibleGroups(JournalDoc.groups(entries, by: grouping))) { group in
+                    ForEach(visibleGroups(model.shownGroups)) { group in
                         if group.level == .day {
                             Section { if !collapsed.contains(group.id) { rows(group.entries) } } header: { groupHeader(group) }
                         } else { groupHeader(group) }
                     }
                 }
             }.padding(.bottom, 14)
-        }.background(JournalStyle.sidebar(dark))
+        }.background(RhemionStyle.rail(dark))
     }
     private func groupHeader(_ group: JournalGroup) -> some View {
         HStack(spacing: 8) {
@@ -387,16 +406,16 @@ struct JournalView: View {
             } label: {
                 HStack(spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(group.title).font(JournalStyle.font(group.level == .month ? 15 : group.level == .week ? 10 : 12.5, group.level == .month ? .heavy : .semibold))
-                        if group.level == .day { Text("\(group.entries.count)").font(JournalStyle.font(11)).foregroundStyle(JournalStyle.tertiary(dark)) }
+                        Text(group.title).font(RhemionStyle.font(group.level == .month ? 15 : group.level == .week ? 10 : 12.5, group.level == .month ? .heavy : .semibold))
+                        if group.level == .day { Text("\(group.entries.count)").font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.tertiary(dark)) }
                     }
                     Spacer(minLength: 4)
-                    Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(.system(size: 10)).foregroundStyle(JournalStyle.tertiary(dark))
+                    Image(systemName: collapsed.contains(group.id) ? "chevron.right" : "chevron.down").font(.system(size: 10)).foregroundStyle(RhemionStyle.tertiary(dark))
                 }.contentShape(Rectangle())
             }
-        }.foregroundStyle(group.level == .week ? JournalStyle.secondary(dark) : JournalStyle.text(dark))
+        }.foregroundStyle(group.level == .week ? RhemionStyle.secondary(dark) : RhemionStyle.text(dark))
             .padding(.horizontal, 12).padding(.top, group.level == .month ? 15 : 9).padding(.bottom, 5)
-            .background(JournalStyle.sidebar(dark)).overlay(alignment: .top) { if group.level == .month { Divider() } }
+            .background(RhemionStyle.rail(dark)).overlay(alignment: .top) { if group.level == .month { Divider() } }
     }
     private func rows(_ values: [JournalEntry]) -> some View {
         ForEach(Array(values.enumerated()), id: \.element.id) { index, entry in
@@ -483,14 +502,14 @@ private struct JournalToolbarToggle: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage).frame(width: 30, height: 30)
-                .foregroundStyle(on || hover ? JournalStyle.text(dark) : JournalStyle.secondary(dark))
+                .foregroundStyle(on || hover ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
             // Active = raised LIGHT surface (--win), the app's "on = neutral-raised" language (same as the
             // Final/Clean/Raw and Theme pills) — not a gray chip. These float on a near-white toolbar (no
             // segmented track), so ON also carries a hairline border for a continuous edge + a restrained
             // shadow for elevation; the border+shadow are reserved for ON so hover can't masquerade as it.
-            .background(!on && hover ? JournalStyle.line2(dark) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(!on && hover ? RhemionStyle.hover(dark) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .activeTile(on, dark: dark, radius: 8)
             .onHover { hover = $0 }.help(help).accessibilityLabel(help).accessibilityValue(on ? "On" : "Off")
     }
@@ -508,14 +527,14 @@ private struct ViewModeToggle: View {
             segment(icon: "list.bullet", isCompact: true, help: "Compact view")
         }
         .padding(2)
-        .background(JournalStyle.sidebar(dark), in: RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
+        .background(RhemionStyle.rail(dark), in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
     }
     private func segment(icon: String, isCompact: Bool, help: String) -> some View {
         let on = compact == isCompact
         return Button { compact = isCompact } label: {
             Image(systemName: icon).font(.system(size: 13, weight: .medium))
-                .foregroundStyle(on ? JournalStyle.text(dark) : JournalStyle.secondary(dark))
+                .foregroundStyle(on ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark))
                 .frame(width: 30, height: 24)
                 .activeTile(on, dark: dark, radius: 6)
                 .contentShape(Rectangle())
@@ -542,10 +561,10 @@ private struct JournalToolbarAction: View {
                 else { Image(systemName: systemImage) }
             }
             .frame(width: 30, height: 30)
-            .foregroundStyle(hover ? JournalStyle.text(dark) : JournalStyle.secondary(dark))
+            .foregroundStyle(hover ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark))
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
-            .background(hover ? JournalStyle.line2(dark) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(hover ? RhemionStyle.hover(dark) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .onHover { hover = $0 }.help(help).accessibilityLabel(help)
             .disabled(busy)
     }
@@ -573,49 +592,35 @@ private struct JournalMenuCard<Content: View>: View {
             .menuCard(dark: dark, shadow: true)
     }
 }
-/// Raised R1 button (DESIGN.md) — the exact treatment of the Dictionary's "Add replacement": a raised
+/// raised button — the exact treatment of the Dictionary's "Add replacement": a raised
 /// win pill + hairline border + a soft shadow, hover shifts the fill.
 private struct JournalActionButton: View {
     let title: String
     let systemImage: String
     let action: () -> Void
-    @Environment(\.colorScheme) private var scheme
-    @State private var hover = false
-    private var dark: Bool { scheme == .dark }
     var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage).font(JournalStyle.font(12, .medium))
-                .foregroundStyle(JournalStyle.text(dark))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(hover ? JournalStyle.line2(dark) : JournalStyle.win(dark), in: RoundedRectangle(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
-        }.buttonStyle(.plain).onHover { hover = $0 }
+        RaisedButton(title: title, systemImage: systemImage, action: action)
     }
 }
-/// A Quiet-tier action (DESIGN.md): an icon + text link with no border or fill — same treatment as the
+/// A Quiet-tier action: an icon + text link with no border or fill — same treatment as the
 /// settings "Restore defaults". `color` sets the accent (e.g. red for a destructive Delete); hover dims it.
 private struct JournalQuietAction: View {
     let title: String
     let systemImage: String
-    var color: Color? = nil
+    var danger: Bool = false
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
-    @State private var hover = false
     private var dark: Bool { scheme == .dark }
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: systemImage).font(.system(size: 11, weight: .regular))
-                Text(title).font(JournalStyle.font(12.5, .regular))
+                Text(title).font(RhemionStyle.font(12.5, .regular))
             }
-            .foregroundStyle(color ?? JournalStyle.text(dark))
-            .opacity(hover ? 0.75 : 1)
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).onHover { hover = $0 }
+        }.buttonStyle(QuietActionStyle(dark: dark, danger: danger))
     }
 }
-/// Gold checkbox (DESIGN.md): solid gold fill + white check when on, hairline border when off. Kept
+/// Gold checkbox: solid gold fill + white check when on, hairline border when off. Kept
 /// internal (not private) so the Clear Data window (ClearData.swift) and the Uninstall window
 /// (FarewellWindow.swift) reuse the exact same control rather than a second implementation.
 struct JournalCheckbox: View {
@@ -627,9 +632,9 @@ struct JournalCheckbox: View {
     private var dark: Bool { scheme == .dark }
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 3.5).fill(on || mixed ? JournalStyle.gold : .clear)   // unchecked = no fill
-            RoundedRectangle(cornerRadius: 3.5).strokeBorder(on || mixed ? JournalStyle.gold : JournalStyle.cbBorder(dark), lineWidth: 1)
-            if on || mixed { Image(systemName: mixed ? "minus" : "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white) }
+            RoundedRectangle(cornerRadius: 3.5).fill(on || mixed ? RhemionStyle.gold : .clear)   // unchecked = no fill
+            RoundedRectangle(cornerRadius: 3.5).strokeBorder(on || mixed ? RhemionStyle.gold : RhemionStyle.checkboxEdge(dark), lineWidth: 1)
+            if on || mixed { Image(systemName: mixed ? "minus" : "checkmark").font(.system(size: 9, weight: .heavy)).foregroundStyle(RhemionStyle.theme(dark).onAccent) }
         }.frame(width: 15, height: 15)
             .accessibilityLabel("Select").accessibilityValue(mixed ? "Mixed" : on ? "Yes" : "No").accessibilityAddTraits(.isButton)
     }
@@ -658,7 +663,7 @@ private struct JournalRow: View {
         if !query.isEmpty {
             var remaining = source.startIndex..<source.endIndex
             while let range = source.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: remaining) {
-                if let converted = Range(range, in: value) { value[converted].backgroundColor = JournalStyle.gold.opacity(0.35) }
+                if let converted = Range(range, in: value) { value[converted].backgroundColor = RhemionStyle.theme(dark).searchHit }
                 remaining = range.upperBound..<source.endIndex
             }
         }
@@ -674,16 +679,16 @@ private struct JournalRow: View {
                 Group {
                     if compact {
                         HStack(spacing: 8) {
-                            Text(JournalDoc.label(entry.ts, "HH:mm")).font(JournalStyle.font(11.5, .medium)).foregroundStyle(JournalStyle.secondary(dark))
+                            Text(JournalDoc.label(entry.ts, "HH:mm")).font(RhemionStyle.font(11.5, .medium)).foregroundStyle(RhemionStyle.secondary(dark))
                             if let status {   // compact: the mark alone, the word in the tooltip
-                                JournalStatusMark(status: status).foregroundStyle(selected ? JournalStyle.text(dark) : JournalStyle.secondary(dark)).help(status.label)
+                                JournalStatusMark(status: status).foregroundStyle(selected ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark)).help(status.label)
                             }
-                            Text(preview).font(JournalStyle.font(13, .light)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                            Text(entry.duration).font(JournalStyle.font(11)).foregroundStyle(JournalStyle.tertiary(dark))
+                            Text(preview).font(RhemionStyle.font(13, .light)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(entry.duration).font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.tertiary(dark))
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(preview).font(JournalStyle.font(13, .light)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(preview).font(RhemionStyle.font(13, .light)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
                             HStack(spacing: 5) {
                                 Text(JournalDoc.label(entry.ts, query.isEmpty ? "HH:mm" : "dd.MM.yyyy · HH:mm"))
                                 Text("·")
@@ -692,29 +697,29 @@ private struct JournalRow: View {
                                 if let status {
                                     HStack(spacing: 4) {
                                         JournalStatusMark(status: status)
-                                        Text(status.label).font(JournalStyle.font(11, .semibold)).lineLimit(1)
-                                    }.foregroundStyle(selected ? JournalStyle.text(dark) : JournalStyle.secondary(dark)).padding(.leading, 4)
+                                        Text(status.label).font(RhemionStyle.font(11, .semibold)).lineLimit(1)
+                                    }.foregroundStyle(selected ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark)).padding(.leading, 4)
                                 }
                                 Spacer(minLength: 0)
                                 Text(entry.duration)
-                            }.font(JournalStyle.font(11)).foregroundStyle(JournalStyle.tertiary(dark))
+                            }.font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.tertiary(dark))
                         }
                     }
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)
             if canInsertAgain {
-                Button(action: insertAgain) { InsertAgainIcon(size: 13).foregroundStyle(JournalStyle.tertiary(dark)).frame(width: 18, height: 18) }
+                Button(action: insertAgain) { InsertAgainIcon(size: 13).foregroundStyle(RhemionStyle.tertiary(dark)).frame(width: 18, height: 18) }
                     .buttonStyle(.plain).opacity(hovered ? 1 : 0).allowsHitTesting(hovered).help("Insert again: put it back in the field where you dictated it")
             }
             if status != .failed, status != .noSpeech, entry.transcript.contains(where: { !$0.isWhitespace }) {   // nothing to copy without text
-                Button(action: copy) { Image(systemName: "doc.on.doc").font(.system(size: 12, weight: .regular)).foregroundStyle(JournalStyle.tertiary(dark)).frame(width: 18, height: 18) }
+                Button(action: copy) { Image(systemName: "doc.on.doc").font(.system(size: 12, weight: .regular)).foregroundStyle(RhemionStyle.tertiary(dark)).frame(width: 18, height: 18) }
                     .opacity(hovered ? 1 : 0).allowsHitTesting(hovered).help("Copy (Final)")
             }
         }.monospacedDigit().padding(.horizontal, 8).padding(.vertical, compact ? 6 : 8)
-            .background(selected ? JournalStyle.selected(dark) : hovered ? JournalStyle.line(dark).opacity(0.6) : .clear, in: RoundedRectangle(cornerRadius: 6))
-            .overlay { if !compact && !selected { RoundedRectangle(cornerRadius: 6).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5).allowsHitTesting(false) } }
+            .background(selected ? RhemionStyle.selected(dark) : hovered ? RhemionStyle.theme(dark).rowHover : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay { if !compact && !selected { RoundedRectangle(cornerRadius: 6).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5).allowsHitTesting(false) } }
             .overlay(alignment: .bottom) {
-                if compact && separator && !selected && !hovered { JournalStyle.line(dark).frame(height: 0.5).padding(.leading, 24) }
+                if compact && separator && !selected && !hovered { RhemionStyle.line(dark).frame(height: 0.5).padding(.leading, 24) }
             }.padding(.horizontal, compact ? 8 : 10).padding(.vertical, compact ? 0 : 4)
     }
 }
@@ -737,11 +742,11 @@ private struct JournalDetail: View {
             // PINNED header — stays put while the transcript scrolls, so Copy is always reachable (a long
             // transcript no longer pushes it off the bottom). Order: mode switcher · app · ⓘ · Copy.
             VStack(alignment: .leading, spacing: 12) {
-                Text(JournalDoc.label(entry.ts, "d MMMM yyyy · HH:mm")).font(JournalStyle.font(18, .bold))
+                Text(JournalDoc.label(entry.ts, "d MMMM yyyy · HH:mm")).font(RhemionStyle.font(18, .bold))
                 HStack(spacing: 8) {
                     modeSwitcher
                     Spacer(minLength: 8)
-                    Text(entry.isJournalOnly ? "Journal only" : (entry.appName ?? "—")).font(JournalStyle.font(11)).lineLimit(1).foregroundStyle(JournalStyle.tertiary(dark))
+                    Text(entry.isJournalOnly ? "Journal only" : (entry.appName ?? "—")).font(RhemionStyle.font(11)).lineLimit(1).foregroundStyle(RhemionStyle.tertiary(dark))
                     Button { info.toggle() } label: { Image(systemName: "info.circle") }.help("How it was recognized")
                         .background(GeometryReader { g in Color.clear.preference(key: InfoAnchorKey.self, value: g.frame(in: .named("detailRoot"))) })
                     JournalActionButton(title: "Copy", systemImage: "doc.on.doc") {
@@ -752,11 +757,11 @@ private struct JournalDetail: View {
                 }
             }
             .padding(EdgeInsets(top: 22, leading: 24, bottom: 14, trailing: 24))
-            Divider().overlay(JournalStyle.line(dark))
+            Divider().overlay(RhemionStyle.line(dark))
             // SCROLL body — transcript, player, and the (deliberate, destructive) Delete at the bottom.
             ScrollView {
               VStack(alignment: .leading, spacing: 0) {
-                if let status = model.status(entry) { statusRow(status); Divider().overlay(JournalStyle.line(dark)) }
+                if let status = model.status(entry) { statusRow(status); Divider().overlay(RhemionStyle.line(dark)) }
                 VStack(alignment: .leading, spacing: 20) {
                     // Selectable transcript in a read-only NSTextView so the selection highlight is OUR gold,
                     // not the system blue accent (SwiftUI's .textSelection can't recolor its highlight).
@@ -768,7 +773,7 @@ private struct JournalDetail: View {
                     JournalPlayer(url: entry.audioURL, durationMS: entry.audioDurationMS, notify: notify)
                     HStack {
                         Spacer()
-                        JournalQuietAction(title: "Delete", systemImage: "trash", color: RhemionStyle.danger, action: delete).disabled(deleting)
+                        JournalQuietAction(title: "Delete", systemImage: "trash", danger: true, action: delete).disabled(deleting)
                     }
                 }.padding(24)
               }
@@ -790,37 +795,24 @@ private struct JournalDetail: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     JournalStatusMark(status: status, size: 13)
-                    Text(status.label).font(JournalStyle.font(13, .semibold))
-                }.foregroundStyle(JournalStyle.text(dark))
-                Text(reason(status, gone: gone)).font(JournalStyle.font(12.5)).foregroundStyle(JournalStyle.secondary(dark))
+                    Text(status.label).font(RhemionStyle.font(13, .semibold))
+                }.foregroundStyle(RhemionStyle.text(dark))
+                Text(reason(status, gone: gone)).font(RhemionStyle.font(12.5)).foregroundStyle(RhemionStyle.secondary(dark))
                     .lineSpacing(3).padding(.leading, 20).fixedSize(horizontal: false, vertical: true)
                 if let error = model.recognizeErrors[entry.id], canRecognize {
-                    Text(error).font(JournalStyle.font(12.5)).foregroundStyle(JournalStyle.text(dark))
+                    Text(error).font(RhemionStyle.font(12.5)).foregroundStyle(RhemionStyle.text(dark))
                         .lineSpacing(3).padding(.leading, 20).fixedSize(horizontal: false, vertical: true)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             if canRecognize {
-                Button { model.runRecognizeAgain(entry) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "waveform").font(.system(size: 12, weight: .medium))
-                        Text(recognizing ? "Recognizing…" : "Recognize again")
-                    }.font(JournalStyle.font(12, .medium))
-                        .foregroundStyle(recognizing ? JournalStyle.secondary(dark) : JournalStyle.text(dark))
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(JournalStyle.win(dark), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-                        .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
-                }.buttonStyle(.plain).disabled(recognizing).help("Recognize the kept recording again")
+                RaisedButton(title: recognizing ? "Recognizing…" : "Recognize again", systemImage: "waveform") {
+                    model.runRecognizeAgain(entry)
+                }
+                .disabled(recognizing).help("Recognize the kept recording again")
             }
             if canPutBack {
-                Button { model.runInsertAgain(entry) } label: {
-                    HStack(spacing: 6) { InsertAgainIcon(size: 13); Text("Insert again") }.font(JournalStyle.font(12, .medium))
-                        .foregroundStyle(JournalStyle.text(dark))
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(JournalStyle.win(dark), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-                        .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
-                }.buttonStyle(.plain).help("Put it back in the field where you dictated it")
+                RaisedButton(title: "Insert again", icon: AnyView(InsertAgainIcon(size: 13))) { model.runInsertAgain(entry) }
+                    .help("Put it back in the field where you dictated it")
             }
         }.padding(.horizontal, 24).padding(.vertical, 14)
     }
@@ -863,15 +855,15 @@ private struct JournalDetail: View {
             ForEach(["Final", "Clean", "Raw"], id: \.self) { value in
                 let on = mode == value
                 Button { mode = value } label: {
-                    Text(value).font(JournalStyle.font(12, .regular))
-                        .foregroundStyle(on ? JournalStyle.text(dark) : JournalStyle.secondary(dark))
+                    Text(value).font(RhemionStyle.font(12, .regular))
+                        .foregroundStyle(on ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark))
                         .padding(.horizontal, 13).padding(.vertical, 4)
                         .contentShape(Rectangle())
                 }
                 .activeTile(on, dark: dark, radius: 6)
             }
-        }.padding(2).background(JournalStyle.sidebar(dark), in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
+        }.padding(2).background(RhemionStyle.rail(dark), in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
     }
     // Same surface as the grouping menu (opaque card, radius 12, soft shadow, no arrow), hung under the
     // ⓘ button and right-aligned to it so it stays inside the detail pane. Click-away dismisses.
@@ -880,7 +872,7 @@ private struct JournalDetail: View {
             ZStack(alignment: .topLeading) {
                 Color.clear.contentShape(Rectangle()).onTapGesture { info = false }
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("How it was recognized").font(JournalStyle.font(13, .semibold)).foregroundStyle(JournalStyle.text(dark))
+                    Text("How it was recognized").font(RhemionStyle.font(13, .semibold)).foregroundStyle(RhemionStyle.text(dark))
                     infoRow("Engine", entry.engine)
                     infoRow("Insertion method", entry.deliveryMethod ?? "—")
                     infoRow("Processing", entry.ms.map { "\($0) ms" } ?? "—")
@@ -888,16 +880,16 @@ private struct JournalDetail: View {
                 }
                 .padding(14)
                 .frame(width: 264, alignment: .leading)
-                .background(JournalStyle.win(dark), in: RoundedRectangle(cornerRadius: 12))
-                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(dark ? 0.44 : 0.22), radius: 17, y: 12)
+                .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
+                .themeShadow(RhemionStyle.theme(dark).menuShadow)
                 .fixedSize()
                 .offset(x: max(8, infoAnchor.maxX - 264), y: infoAnchor.maxY + 5)
             }
         }
     }
     private func infoRow(_ title: String, _ value: String) -> some View {
-        HStack { Text(title).foregroundStyle(JournalStyle.secondary(dark)); Spacer(); Text(value).foregroundStyle(JournalStyle.text(dark)) }.font(JournalStyle.font(12))
+        HStack { Text(title).foregroundStyle(RhemionStyle.secondary(dark)); Spacer(); Text(value).foregroundStyle(RhemionStyle.text(dark)) }.font(RhemionStyle.font(12))
     }
 }
 
@@ -922,23 +914,23 @@ private struct JournalPlayer: View {
         HStack(spacing: 12) {
             Button { toggle() } label: {
                 Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 14, weight: .semibold)).offset(x: playing ? 0 : 1)
-                    .foregroundStyle(JournalStyle.text(dark)).frame(width: 30, height: 30)
+                    .foregroundStyle(RhemionStyle.text(dark)).frame(width: 30, height: 30)
             }.buttonStyle(JournalPlayStyle()).disabled(!playable)
                 .help(playable ? (playing ? "Pause" : "Play") : available ? "Audio couldn't be loaded" : "No audio for this entry").accessibilityLabel(playing ? "Pause" : "Play")
             GeometryReader { geometry in
                 let width = max(1, geometry.size.width - 12)
                 ZStack(alignment: .leading) {
-                    Capsule().fill(JournalStyle.tertiary(dark).opacity(0.55)).frame(height: 2)
+                    Capsule().fill(RhemionStyle.theme(dark).track).frame(height: 2)
                     // Played portion — monochrome INK (text color): near-black on light / near-white on
                     // dark, so it clearly contrasts the grey track (white-on-light barely showed).
-                    Capsule().fill(JournalStyle.text(dark)).frame(width: width * position, height: 2)
+                    Capsule().fill(RhemionStyle.text(dark)).frame(width: width * position, height: 2)
                     // Thumb matches the Copy/Play raised style: a raised neutral badge (win + hairline +
                     // shadow) with a contrasting inner dot (dark on light, light on dark).
                     ZStack {
-                        Circle().fill(JournalStyle.win(dark)).frame(width: 13, height: 13)
-                            .overlay { Circle().strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-                            .shadow(color: .black.opacity(dark ? 0.30 : 0.14), radius: 1.5, y: 1)
-                        Circle().fill(dark ? Color(journalHex: 0xE8E8EC) : Color(journalHex: 0x1D1D1F)).frame(width: 5, height: 5)
+                        Circle().fill(RhemionStyle.win(dark)).frame(width: 13, height: 13)
+                            .overlay { Circle().strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
+                            .themeShadow(RhemionStyle.theme(dark).knobShadow)
+                        Circle().fill(RhemionStyle.text(dark)).frame(width: 5, height: 5)
                     }.offset(x: width * position - 6.5)
                 }.padding(.horizontal, 6).frame(height: 28).contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0)
@@ -946,14 +938,14 @@ private struct JournalPlayer: View {
                         .onEnded { _ in if playable { seek(position); scrubbing = false } })
             }.frame(minWidth: 35).frame(height: 28).opacity(playable ? 1 : 0.5)
                 .accessibilityLabel("Playback position").accessibilityValue(JournalDoc.duration(position * total))
-            Text("\(JournalDoc.duration(position * total)) / \(available || durationMS != nil ? JournalDoc.duration(total) : "—")").font(JournalStyle.font(11)).monospacedDigit().fixedSize()
-            Button { cycleRate() } label: { Text(rateLabel).font(JournalStyle.font(12, .medium)).fixedSize() }
+            Text("\(JournalDoc.duration(position * total)) / \(available || durationMS != nil ? JournalDoc.duration(total) : "—")").font(RhemionStyle.font(11)).monospacedDigit().fixedSize()
+            Button { cycleRate() } label: { Text(rateLabel).font(RhemionStyle.font(12, .medium)).fixedSize() }
                 .buttonStyle(.plain).disabled(!playable).help("Playback speed")
             Button { if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) } else { notify("No audio file for this entry.") } } label: { Image(systemName: "folder") }
                 .disabled(!available).help("Reveal in Finder").accessibilityLabel("Reveal in Finder")
-        }.foregroundStyle(JournalStyle.secondary(dark)).padding(13)
-            .background(JournalStyle.sidebar(dark), in: RoundedRectangle(cornerRadius: 10))
-            .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
+        }.foregroundStyle(RhemionStyle.secondary(dark)).padding(13)
+            .background(RhemionStyle.rail(dark), in: RoundedRectangle(cornerRadius: 10))
+            .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
             .onAppear { if let url { let p = try? AVAudioPlayer(contentsOf: url); p?.enableRate = true; p?.prepareToPlay(); player = p } }
             .onDisappear { player?.stop(); player = nil }
             .onReceive(ticker) { _ in
@@ -993,20 +985,14 @@ private struct JournalPlayFace<Label: View>: View {
     private var dark: Bool { scheme == .dark }
     var body: some View {
         label
-            .background(hover ? JournalStyle.line2(dark) : JournalStyle.win(dark), in: Circle())
-            .overlay { Circle().strokeBorder(JournalStyle.line(dark), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
+            .background(hover ? RhemionStyle.hover(dark) : RhemionStyle.win(dark), in: Circle())
+            .overlay { Circle().strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
+            .themeShadow(RhemionStyle.theme(dark).raisedShadow)
             .scaleEffect(pressed ? 0.95 : 1)
             .onHover { hover = $0 }
     }
 }
 
-private extension NSColor {
-    convenience init(journalHex hex: UInt32) {
-        self.init(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
-                  blue: CGFloat(hex & 255) / 255, alpha: 1)
-    }
-}
 
 /// A read-only, selectable transcript rendered with AppKit so the selection highlight is OUR gold instead
 /// of the system-accent blue (SwiftUI's `.textSelection` exposes no way to recolor the highlight). Non-
@@ -1019,12 +1005,12 @@ private struct SelectableText: NSViewRepresentable {
     @Binding var height: CGFloat
 
     private var font: NSFont { NSFont(name: "Mulish-Regular", size: 15) ?? .systemFont(ofSize: 15) }
-    private var textColor: NSColor { NSColor(journalHex: dark ? 0xE8E8EC : 0x1D1D1F) }
+    private var textColor: NSColor { RhemionStyle.nsText(dark) }
     // Same warm-yellow hue as the journal list's selected row (#F6DD84), just slightly translucent so the
     // text keeps breathing through it (the solid fill read too dense). Base hue matches the selected row —
     // the amber gold #E0A42E turned peachy on white.
     private var selectionColor: NSColor {
-        NSColor(journalHex: 0xF6DD84).withAlphaComponent(dark ? 0.32 : 0.70)
+        RhemionStyle.nsTextSelection(dark)
     }
 
     private func attributed() -> NSAttributedString {

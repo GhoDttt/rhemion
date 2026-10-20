@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Darwin
 import Foundation
 import RhemionStorage
@@ -71,17 +74,16 @@ enum AppPaths {
     }
 
     /// THE ONE PLACE that maps `AppSettings` onto `StorageLayout` — everything Clear Data /
-    /// Uninstall can touch. Names for `parakeetFolders` and `fluidModelsRoot` confirmed against
-    /// FluidAudio's `AsrModels.defaultCacheDirectory(for:)` (Repo.parakeetV3/.parakeetV2 → folderName
-    /// strips "-coreml" from the repo slug → "parakeet-tdt-0.6b-v3" / "parakeet-tdt-0.6b-v2", under
-    /// `~/Library/Application Support/FluidAudio/Models`).
+    /// Uninstall can touch. `parakeetFolders` come from `StorageLayout.parakeetModels`, pinned to FluidAudio's
+    /// `AsrModels.defaultCacheDirectory(for:)` by `ParakeetPresenceParityTests`, under
+    /// `~/Library/Application Support/FluidAudio/Models`.
     static func storageLayout(settings: AppSettings) -> StorageLayout {
         let home = trustedHome
         return StorageLayout(
             home: home, stateDir: stateDir, dataDir: dataDir,
             tmpBase: resolvedTemporaryDirectory(),
             fluidModelsRoot: home.appendingPathComponent("Library/Application Support/FluidAudio/Models"),
-            parakeetFolders: ["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2"],
+            parakeetFolders: StorageLayout.parakeetModels.map(\.folder),
             whisperDir: home.appendingPathComponent(".local/share/whisper"),
             extraModelDirs: extraModelDirs(settings.modelDirs),
             exportDir: validatedExportDir(settings.exportDir, home: home, stateDir: stateDir, dataDir: dataDir),

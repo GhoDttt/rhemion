@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Rhemion — native menu-bar app. This file is the app shell; the dictation
 // pieces plug into AppController as they land: RuntimeSupervisor, RuntimeClient,
 // HotkeyTap, Delivery, NotchIndicator, full wiring.
@@ -292,6 +295,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         availableModels = models
         availableMics = mics
         hubWindow?.setDevices(models: models, mics: mics)
+        // First run downloads the model recommended for the Mac's languages, the same choice Settings › Models marks.
+        modelDownload.recommend(ModelRecommendation.pick(ModelsCatalog.rows(models: models, settings: settings),
+                                                         mine: settings.dictationLanguages,
+                                                         appleAdvanced: AppleSpeechLanguages.advanced))
         modelDownload.devicesUpdated(models)   // drives the Speech-model row (present / preparing / ready)
         syncModelState()
         // While the runtime prepares the model, ask again shortly; the report flips to warm when it is done.
@@ -337,14 +344,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             setStatus("Downloading speech model — \(Int(f * 100))%")
             showWelcomeForSetup()
         case .preparing:
-            // Usually under a second (a first-time compile can take a minute): the spinner only; Welcome comes
+            // Usually under a second (a first-time compile can take a minute): the waiting breath only; Welcome comes
             // forward only if it is already open, so a press right after login doesn't pop a window.
             indicator?.preparing()
             setStatus("Preparing speech model…")
             if let welcome = onboardingWindow, welcome.isShowing { welcome.bringToFront() }
         default:
             indicator?.downloadHint()
-            setStatus("Download the speech model to use dictation (Welcome / Settings › Audio & Model)")
+            setStatus("Download the speech model to use dictation (Welcome / Settings › Models)")
             showWelcomeForSetup()
         }
     }
@@ -354,7 +361,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     @MainActor private func handleMicrophoneGate(granted: Bool) {
         hotkey?.abortRecording()
         if granted {
-            // The runtime restarts to open the microphone; the spinner ends when it reports ready. During a
+            // The runtime restarts to open the microphone; the waiting breath ends when it reports ready. During a
             // download the restart waits for it, and the download ring stays.
             if case .downloading = modelDownload.phase {} else { indicator?.preparing() }
             restartRuntimeForMicrophone()
@@ -362,6 +369,16 @@ final class AppController: NSObject, NSApplicationDelegate {
             indicator?.downloadHint()
             showWelcomeForSetup()
         }
+    }
+
+    /// Restart the runtime (so it finds a model just downloaded) once no recording or data operation is running;
+    /// checks again every second until then.
+    @MainActor private func restartRuntimeWhenIdle() {
+        guard !dataOps.isRecording, !dataOps.inProgress else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.restartRuntimeWhenIdle() }
+            return
+        }
+        supervisor.restart()
     }
 
     @MainActor private func restartRuntimeForMicrophone() {
@@ -430,6 +447,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppleSpeechLanguages.load()
         installMainMenu()
         AppLog.enforceHygiene()   // 7 days / 15 MB of diagnostic logs, before the first line of this run
         AppLog.startHygieneTimer()
@@ -439,13 +457,14 @@ final class AppController: NSObject, NSApplicationDelegate {
         //    the runtime always has a complete snapshot, then load our view of it.
         SettingsStore.ensureExists()
         settings = SettingsStore.load()
+        modelDownload.selectedID = settings.model
         showPinShortcut(settings.pinHotkeys)   // the menu was built before settings were read
         settings.applyAppearance()
         inputMethod.value = settings.inputMethod
         // Reconcile the login-item registration to the saved preference (default on). Non-fatal: a
         // failure is logged and retried on the next launch/toggle, never crashes startup.
         LoginItem.reconcile(enabled: settings.launchAtLogin)
-        log("settings: ptt=[\(settings.pttKeys.joined(separator: ","))], input=\(settings.inputMethod), language=\(settings.language)")
+        log("settings: ptt=[\(settings.pttKeys.joined(separator: ","))], input=\(settings.inputMethod), languages=\(settings.dictationLanguages.joined(separator: ","))")
 
         // 1) Own isolated runtime. Migrate any history from the earlier location into the Application Support
         //    dataDir FIRST — before the runtime starts — so its startup reconcile finds the audio
@@ -558,9 +577,15 @@ final class AppController: NSObject, NSApplicationDelegate {
             case let .rerecognized(id, ok, error):
                 Task { @MainActor in self?.hubWindow?.journal.recognized(id: id, ok: ok, error: error) }
             case let .devices(models, mics): Task { @MainActor in self?.updateDevices(models: models, mics: mics) }
-            case let .modelDownload(_, state, fraction, error):
+            case let .modelDownload(id, state, fraction, error):
                 Task { @MainActor in
                     guard let self else { return }
+                    // A download from Settings › Models: its row shows the progress; dictation goes on meanwhile.
+                    // Once on disk the runtime restarts to find it, never during a recording.
+                    if self.modelDownload.transferEvent(id: id, state: state, fraction: fraction) {
+                        if state == "done", id != "apple-speech" { self.restartRuntimeWhenIdle() }
+                        return
+                    }
                     // Always fold the event into the phase model — quiesce()'s own ~3s cancel-download
                     // poll (DataOperations.swift) reads `modelDownload.phase` as its only signal that the
                     // runtime's "canceled" reply landed, and this call is the only thing that flips phase
@@ -580,8 +605,12 @@ final class AppController: NSObject, NSApplicationDelegate {
                     case "done":
                         // A finished download isn't usable until a fresh runtime discovers + registers it;
                         // restart so it does (and prewarms). Readiness then arrives via the next `.devices`.
+                        // Use what was downloaded: the recommendation may be another model than the default.
+                        self.settings.model = self.modelDownload.modelID
+                        self.modelDownload.selectedID = self.modelDownload.modelID
+                        if !self.settingsWriteSuppressed, !SettingsStore.save(self.settings) { log("settings: WARN save failed (first-run model)") }
                         self.setStatus("Preparing speech model…")
-                        self.indicator?.preparing()   // spinner until the restarted runtime reports the model warm
+                        self.indicator?.preparing()   // waiting breath until the restarted runtime reports the model warm
                         // This restart also opens the microphone if access was granted during the download.
                         self.micAuthorizedAtRuntimeStart.value = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
                         self.micRestartPending = false
@@ -688,6 +717,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             perf.markRelease()
             client?.send(.stop)
         }
+        hotkey.onChord = { [weak client, recordingFlag] in
+            // The dictation key was part of a shortcut (⌘W with Right Command): discard the take, never journal it.
+            guard recordingFlag.value else { return }
+            recordingFlag.value = false
+            log("PTT: shortcut, take discarded")
+            client?.send(.cancel)
+            Task { @MainActor in indicator.hide() }
+        }
         hotkey.onCountdown = { remaining in Task { @MainActor in indicator.countdown(remaining) } }
         hotkey.onCountdownCancel = { Task { @MainActor in indicator.cancelCountdown() } }
         hotkey.setPTTKeys(settings.pttKeys)
@@ -747,6 +784,14 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         // Synchronous on the tap's main-run-loop callback (assumeIsolated is safe — we ARE on main), so
         // the swallow decision reflects whether the gesture actually claimed an action THIS press.
+        escGesture.whyNotEligible = { [recordingFlag, undoStore] in
+            let p = escPolicy.value
+            if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, p.except.contains(front) { return "\(front) is an exception" }
+            if recordingFlag.value { return p.cancel ? "recording" : "Cancel is off" }
+            guard p.erase else { return "Erase is off" }
+            guard let armed = undoStore.armedAge() else { return "no inserted take to erase" }
+            return String(format: "last take inserted %.1f s ago, erase works for %.0f s", armed.age, armed.ttl)
+        }
         escGesture.onDoubleTap = { [weak self] in
             MainActor.assumeIsolated { self?.handleEscapeGesture() ?? false }
         }
@@ -765,6 +810,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 // A model-folder change alters what the runtime's whisper scan finds, so re-query the
                 // device list afterward to refresh the model picker in place.
                 let modelDirsChanged = self.settings.modelDirs != updated.modelDirs
+                let modelChanged = self.settings.model != updated.model
                 self.settings = updated
                 updated.applyAppearance()
                 if let ind = self.indicator { self.applyIndicatorStyle(updated.indicatorStyle, to: ind) }
@@ -792,7 +838,14 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.applyShortcutSettings(updated)
                 LoginItem.reconcile(enabled: updated.launchAtLogin)
                 if modelDirsChanged { self.client?.send(.listDevices) }
-                log("settings changed: ptt=[\(updated.pttKeys.joined(separator: ","))], input=\(updated.inputMethod), language=\(updated.language)")
+                // Another model: the runtime prepares it now and frees the old one, so the next dictation is
+                // instant; until its report says warm, a press gets the waiting breath, as at startup.
+                if modelChanged {
+                    self.modelDownload.switching(to: updated.model)
+                    self.syncModelState()
+                    self.client?.send(.useModel(id: updated.model))
+                }
+                log("settings changed: ptt=[\(updated.pttKeys.joined(separator: ","))], input=\(updated.inputMethod), languages=\(updated.dictationLanguages.joined(separator: ","))")
             },
             // While the recorder captures a chord, drop the global registrations so the current chord
             // reaches the local monitor (and no global hotkey fires mid-capture); restore afterward.
@@ -898,6 +951,24 @@ final class AppController: NSObject, NSApplicationDelegate {
         self.dictAddPanel = dictAddPanel
         self.undoReplace = undoReplace
         self.escGesture = escGesture
+        // Launch arguments for checking a screen without clicking to it (never saved):
+        // `--settings Models` opens Settings at that page, `--hub Journal|Dictionary` that destination,
+        // `--welcome` opens Welcome, `--appearance light|dark` overrides the theme for this run.
+        let args = CommandLine.arguments
+        func arg(_ name: String) -> String? {
+            args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        }
+        if let look = arg("--appearance") {
+            NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+        }
+        if let page = arg("--settings"), let category = SettingsCategory(rawValue: page) {
+            client.send(.listDevices)
+            hubWindow?.showSettings(category)
+        } else if let name = arg("--hub"), let dest = HubDestination.allCases.first(where: { $0.title == name }) {
+            hubWindow?.show(dest: dest)
+        } else if args.contains("--welcome") {
+            onboardingWindow?.show()
+        }
     }
 
     /// Stop every global hotkey/event tap (quit and the uninstall exit path).

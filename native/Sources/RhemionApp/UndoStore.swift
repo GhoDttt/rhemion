@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // UndoStore — the armed state describing the LAST delivered dictation, so the two in-place reversal
 // gestures can act on it: undo-replace (Cmd+Option+Shift+L, revert a dictionary substitution back to
 // the spoken original) and double-Esc delete (erase the whole delivered take). Delivery arms it on
@@ -41,6 +44,14 @@ final class UndoStore: @unchecked Sendable {
 
     /// Whether a valid (non-expired) record is armed. Used by the Esc gesture to decide whether a
     /// double-Esc should engage (and swallow the second Esc) at all. Does not consume or mutate.
+    /// Seconds since the armed take was delivered (nil when nothing is armed), and the TTL: for the log
+    /// line that says why a double-Esc did nothing.
+    func armedAge() -> (age: CFTimeInterval, ttl: CFTimeInterval)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let a = armed else { return nil }
+        return (CACurrentMediaTime() - a.at, ttl)
+    }
+
     func isArmed() -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let a = armed else { return false }

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Did a paste land? ⌘V only says "the shortcut was sent". Before it, read the focused field's character count
 // and selection (cheap: no full value); after it, poll until the count grew by the expected amount and the caret
 // sits right after the inserted text. A field that cannot be read stays "unverified": that is not a failure
@@ -20,11 +23,16 @@ struct PasteVerifier: @unchecked Sendable {
     private let element: AXUIElement
     private let count0: Int
     private let range0: CFRange
+    /// An empty field that stays empty is a miss, not a proxy: a visible field of normal size in a browser.
+    private let emptyIsReal: Bool
 
-    /// Reads the focused field now; nil when it cannot be read (the outcome is then `.unreadable`).
-    static func before() -> PasteVerifier? {
+    /// Reads the focused field now; nil when it cannot be read (the outcome is then `.unreadable`). `browser`:
+    /// the target is a web browser, whose visible text fields are the real ones (Electron editors and Google
+    /// Docs focus a hidden proxy instead, which reads empty however much text lands).
+    static func before(browser: Bool = false) -> PasteVerifier? {
         guard let element = focused(), let count = characterCount(element), let range = selectedRange(element) else { return nil }
-        return PasteVerifier(element: element, count0: count, range0: range)
+        let real = browser && count == 0 && (size(element).map { $0.width >= 40 && $0.height >= 14 } ?? false)
+        return PasteVerifier(element: element, count0: count, range0: range, emptyIsReal: real)
     }
 
     /// Polls for up to `budgetMS`, blocking the calling (non-main) queue. `inserted` is the UTF-16 length pasted.
@@ -50,7 +58,9 @@ struct PasteVerifier: @unchecked Sendable {
             if let count = Self.characterCount(element), let range = Self.selectedRange(element) {
                 if count - count0 == grow && range.location == caret && range.length == 0 { return .landed(ms: ms) }
                 // A caret that moved only because the field lost focus (Safari's contenteditable) is no change.
-                if count != count0 || (range.location != range0.location && !focusAway) { changed = true; decide(nil) }
+                if count != count0 || ((range.location != range0.location || range.length != range0.length) && !focusAway) {
+                    changed = true; decide(nil)
+                }
             } else {
                 return .unreadable
             }
@@ -60,15 +70,27 @@ struct PasteVerifier: @unchecked Sendable {
                 away += 1
                 if away >= 2 { decide(.elsewhere); return .elsewhere }
             } else { away = 0 }
-            if count0 == 0 && ms >= 100 { decide(nil) }
+            if count0 == 0 && !emptyIsReal && ms >= 100 { decide(nil) }
             if ms >= budgetMS { break }
         }
         // A field that reads empty before and after is usually a proxy (a terminal's hidden input, an editor's
         // off-screen textarea: VSCodium logged 56 of these in one session), so "unchanged" proves nothing there.
-        if !changed && count0 == 0 { return .unreadable }
+        // A browser's visible field is not a proxy (Chrome dropped every other paste in one CRM field).
+        if !changed && count0 == 0 && !emptyIsReal { return .unreadable }
         if !changed { decide(.unchanged) }
         return changed ? .changedOtherwise : .unchanged
     }
+
+    /// The field before the paste, exactly: still focused, the same length, the same caret and selection. The last
+    /// check before the same paste goes out again (a selection made meanwhile would be replaced by it).
+    func stillAsBefore() -> Bool {
+        guard let now = Self.focused(), CFEqual(now, element),
+              let count = Self.characterCount(element), let range = Self.selectedRange(element) else { return false }
+        return count == count0 && range.location == range0.location && range.length == range0.length
+    }
+
+    /// The field now holds `n` more characters than before the paste (two landings of one text, in the log).
+    func grewBy(_ n: Int) -> Bool { Self.characterCount(element).map { $0 - count0 == n - range0.length } ?? false }
 
     private static func focused() -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
@@ -85,6 +107,14 @@ struct PasteVerifier: @unchecked Sendable {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, kAXNumberOfCharactersAttribute as CFString, &v) == .success else { return nil }
         return (v as? NSNumber)?.intValue
+    }
+
+    private static func size(_ e: AXUIElement) -> CGSize? {
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &v) == .success,
+              let v, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        return AXValueGetValue(unsafeDowncast(v, to: AXValue.self), .cgSize, &size) ? size : nil
     }
 
     private static func selectedRange(_ e: AXUIElement) -> CFRange? {

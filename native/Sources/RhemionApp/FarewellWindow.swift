@@ -1,8 +1,11 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // The Uninstall farewell window —
 // the window is ONLY the choice: the logo in its calmer farewell rhythm in the side column while the user
 // chooses what leaves with Rhemion, then Cancel / Uninstall. Its height never changes while ticking (every
-// hint is constant). "Uninstall" opens the shared operation pop-up (DESIGN.md "Operation pop-up",
-// `OperationPopupHost`) over it: the one confirmation (a receipt of what goes, 0.5 s guard), then the five
+// hint is constant). "Uninstall" opens the shared operation pop-up
+// (`OperationPopupHost`) over it: the one confirmation (a receipt of what goes, 0.5 s guard), then the five
 // uninstall steps, ticked as `AppController.runUninstall` reports progress — paced so each step is seen
 // running and done. On success the pop-up shows an itemised report of what went (grouped by option, every
 // path behind "Show all N items"); "Goodbye" closes it, the mark collapses into its core and the app quits (a
@@ -249,6 +252,8 @@ final class FarewellModel: ObservableObject {
             let label: String?
             if file.hasPrefix("parakeet-") {
                 label = "Parakeet " + (file.split(separator: "-").last.map(String.init) ?? file)
+            } else if file.lowercased().hasSuffix(".gguf") {
+                label = (file as NSString).deletingPathExtension
             } else if file.lowercased().hasSuffix(".bin") && !StorageLayout.isSilenceModel(file) {
                 label = "Whisper " + StorageLayout.whisperID(forFile: file).dropFirst("whisper-".count)
             } else {
@@ -428,7 +433,7 @@ final class FarewellWindowController: NSObject, NSWindowDelegate {
                                   finish: { [weak self] in self?.close(); self?.finish() })
         self.model = model
         let root = FarewellView(model: model, onCancel: { [weak self] in self?.cancelChoice() })
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: root.themedRoot())
         hosting.sizingOptions = [.preferredContentSize]
         let window = self.window ?? NSWindow(contentViewController: hosting)
         window.contentViewController = hosting
@@ -486,8 +491,8 @@ final class FarewellWindowController: NSObject, NSWindowDelegate {
 /// The window's content — layout A: a recessed side column like Welcome layout C
 /// (logo in its farewell rhythm, the question, the pitch, a quiet footer) and a main column with the
 /// options — hello and goodbye read as a pair. Only the choice: every hint is constant, so ticking
-/// never changes the height. App controls only (DESIGN.md): Cancel is a Raised R1 button,
-/// Uninstall is Raised R1 with danger-red text, checkboxes are the gold `JournalCheckbox`, folders are the
+/// never changes the height. App controls only: Cancel is a raised button,
+/// Uninstall is raised with danger-red text, checkboxes are the gold `JournalCheckbox`, folders are the
 /// shared `FolderView`. While the pop-up is up (or the mark collapses) it takes no input.
 struct FarewellView: View {
     @ObservedObject var model: FarewellModel

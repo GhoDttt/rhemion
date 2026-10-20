@@ -37,9 +37,9 @@ Settings › General › **Text insertion**:
 
 Password fields are not filled.
 
-## Language
+## Languages and models
 
-Settings › General › **Recognition language**: Auto, Russian or English.
+Settings › **Models** › **Languages you dictate in**: the languages you speak. Rhemion recommends a model for them and lists the others from the best to the weakest, with speed and accuracy scores out of 10; click a score or "Multilingual" to see what it is based on. Each row has **Download**, then **Manage** › **Use this model**, **Show in Finder** and **Remove…**. **Recognition** says what the model in use does with your languages and, where it helps, can keep it to one alphabet. **Model folders** adds folders with model files you already have. A model you switch to applies from your next dictation.
 
 ## Dictionary
 

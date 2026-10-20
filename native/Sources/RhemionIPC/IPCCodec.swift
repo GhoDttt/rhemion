@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 public enum IPCCodec {
@@ -34,7 +37,13 @@ public enum IPCCodec {
             if let error { tail += #","error":\#(jsonString(error))"# }
             obj = #"{"event":"model-download","id":\#(jsonString(id)),"state":\#(jsonString(state))\#(tail)}"#
         case .devices(let models, let mics):
-            let m = jsonArray(models.map { ["id": $0.id, "label": $0.label, "engine": $0.engine, "found": $0.found, "warm": $0.warm, "damaged": $0.damaged] })
+            let m = jsonArray(models.map { o -> [String: Any] in
+                var m: [String: Any] = ["id": o.id, "label": o.label, "engine": o.engine, "found": o.found, "warm": o.warm, "damaged": o.damaged]
+                if let l = o.languages { m["languages"] = l }
+                if let h = o.handling { m["handling"] = h }
+                if let s = o.maxSeconds { m["max_seconds"] = s; m["soft_limit"] = o.softLimit }
+                return m
+            })
             let d = jsonArray(mics.map { ["uid": $0.uid, "name": $0.name, "built_in": $0.builtIn] })
             obj = #"{"event":"devices","models":\#(m),"mics":\#(d)}"#
         case .rerecognized(let id, let ok, let error):
@@ -70,6 +79,7 @@ public enum IPCCodec {
         case .downloadModel(let id):
             obj = #"{"cmd":"download-model","id":\#(jsonString(id))}"#
         case .cancelModelDownload: obj = #"{"cmd":"cancel-model-download"}"#
+        case .useModel(let id): obj = #"{"cmd":"use-model","id":\#(jsonString(id))}"#
         case .listDevices: obj = #"{"cmd":"list-devices"}"#
         case .rerecognize(let id): obj = #"{"cmd":"rerecognize","id":\#(jsonString(id))}"#
         case .deliverResult(let session, let status):
@@ -102,6 +112,8 @@ public enum IPCCodec {
             case "download-model":
                 if let id = obj["id"] as? String { commands.append(.downloadModel(id: id)) }
             case "cancel-model-download": commands.append(.cancelModelDownload)
+            case "use-model":
+                if let id = obj["id"] as? String, !id.isEmpty { commands.append(.useModel(id: id)) }
             case "list-devices": commands.append(.listDevices)
             case "rerecognize":
                 if let id = obj["id"] as? String, !id.isEmpty { commands.append(.rerecognize(id: id)) }
@@ -183,7 +195,9 @@ public enum IPCCodec {
                     guard let id = m["id"] as? String, let label = m["label"] as? String,
                           let engine = m["engine"] as? String, let found = m["found"] as? Bool else { return nil }
                     return ModelOption(id: id, label: label, engine: engine, found: found, warm: m["warm"] as? Bool ?? true,
-                                       damaged: m["damaged"] as? Bool ?? false)
+                                       damaged: m["damaged"] as? Bool ?? false,
+                                       languages: m["languages"] as? [String], handling: m["handling"] as? String,
+                                       maxSeconds: m["max_seconds"] as? Int, softLimit: m["soft_limit"] as? Bool ?? false)
                 }
                 let mics = (obj["mics"] as? [[String: Any]] ?? []).compactMap { d -> MicOption? in
                     guard let uid = d["uid"] as? String, let name = d["name"] as? String,

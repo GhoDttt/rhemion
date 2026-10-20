@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 public struct SettingsSnapshot: Equatable, Sendable {
@@ -5,7 +8,7 @@ public struct SettingsSnapshot: Equatable, Sendable {
     /// free of an ASR dependency; the authoritative registry that maps ids to engines/paths and
     /// validates them lives in RhemionASR (`ModelRegistry`). An empty `model` falls back to this;
     /// an unknown-but-nonempty value is passed through and resolved (and normalized) by the registry.
-    public static let defaultModel = "parakeet-v3"
+    public static let defaultModel = ModelCatalog.defaultID
 
     public let audioMicrophone: String
     public let dataDir: String?
@@ -31,6 +34,12 @@ public struct SettingsSnapshot: Equatable, Sendable {
     /// Kept as a plain string here so RhemionCore stays free of ASR dependencies; the authoritative
     /// mapper (LanguagePolicy) lives in RhemionASR.
     public let language: String
+    /// 3.2: the languages the user dictates in (ISO 639-1). When present they decide recognition and
+    /// `language` is only the legacy mirror; empty = a settings file from before 3.2.
+    public let languages: [String]
+    /// 3.2: "auto" (default: hear every language the model knows) or "limit" (narrow to the languages as far as
+    /// the model can). Only "limit" ever narrows.
+    public let recognition: String
     /// Advanced override: path to the shared `whisper-cli` binary. Nil = use the built-in default.
     public let whisperBinary: String?
     /// Extra directories to scan for models, in addition to the built-in defaults. Lets the user
@@ -44,7 +53,7 @@ public struct SettingsSnapshot: Equatable, Sendable {
                 audioRetentionValue: Int = 0, audioRetentionUnit: String = "days",
                 transcriptRetentionValue: Int = 0, transcriptRetentionUnit: String = "months",
                 model: String = SettingsSnapshot.defaultModel, whisperBinary: String? = nil,
-                modelDirs: [String] = [], language: String = "auto") {
+                modelDirs: [String] = [], language: String = "auto", languages: [String] = [], recognition: String = "auto") {
         let value = audioMicrophone.trimmingCharacters(in: .whitespacesAndNewlines)
         self.audioMicrophone = value.isEmpty ? "auto" : value
         let data = dataDir?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,6 +72,8 @@ public struct SettingsSnapshot: Equatable, Sendable {
         self.modelDirs = modelDirs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let lang = language.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = lang.isEmpty ? "auto" : lang
+        self.recognition = recognition == "limit" ? "limit" : "auto"
+        self.languages = languages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
     public static let retentionUnits = ["days", "weeks", "months"]
@@ -125,7 +136,9 @@ public struct SettingsSnapshot: Equatable, Sendable {
             model: object["model"] as? String ?? SettingsSnapshot.defaultModel,
             whisperBinary: object["whisper_binary"] as? String,
             modelDirs: SettingsSnapshot.parseModelDirs(object["model_dirs"] as? String),
-            language: object["language"] as? String ?? "auto"
+            language: object["language"] as? String ?? "auto",
+            languages: object["languages"] as? [String] ?? [],
+            recognition: object["recognition"] as? String ?? "auto"
         )
     }
 }

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Serial text-delivery router. Exactly one item may be in flight, and an item's completion is
 // idempotent so a late watchdog/callback can never advance the FIFO twice.
 
@@ -151,7 +154,8 @@ final class Delivery: @unchecked Sendable {
     private let verifyQueue = DispatchQueue(label: "com.sageathor.rhemion.app.paste-verify", qos: .utility)
 
     private func paste(_ payload: String, item: Item) {
-        let verifier = PasteVerifier.before()
+        let verifier = PasteVerifier.before(browser: item.targetPid.map { AXInsert.isBrowser(pid: $0) } ?? false)
+        let chromium = item.targetPid.map { AXInsert.isChromium(pid: $0) } ?? false
         let session = item.session
         var stillTarget: (@Sendable () -> Bool)? = nil
         if item.checkTarget, let recheck = targetRecheck { stillTarget = { recheck(session) } }
@@ -163,6 +167,10 @@ final class Delivery: @unchecked Sendable {
             // ⌘V only says the shortcut was sent: the status waits for the field to change (about 50 ms). A miss
             // (the field stayed as it was, for the whole window or while the focus moved on) is Not inserted.
             guard let verifier else { log("verify: paste unreadable"); self.queue.async { self.finish(item, status: "paste-submitted") }; return }
+            if chromium, let token {
+                self.verifyQueue.async { self.verifyOrRepaste(payload, item: item, verifier: verifier, token: token, stillTarget: stillTarget) }
+                return
+            }
             self.verifyQueue.async {
                 let outcome = verifier.after(inserted: payload.utf16.count) { miss in
                     let status = miss == .elsewhere ? "paste-elsewhere" : miss == .unchanged ? "paste-unchanged" : "paste-submitted"
@@ -172,6 +180,48 @@ final class Delivery: @unchecked Sendable {
                 // fallback restore, ClipboardPaste.fallbackRestoreMS).
                 if case .landed = outcome, let token { ClipboardPaste.restoreNow(token: token) }
                 log("verify: paste \(outcome.label) (\(verifier.label))")
+            }
+        }
+    }
+
+    /// How long a Chromium field may stay exactly as it was before the paste counts as dropped and ⌘V goes once
+    /// more. Landings show in about 50 ms (Chrome 155 bench and daily use: p99 under 200 ms).
+    static let chromiumMissMS = 500
+
+    /// Chromium 155 and later fire the paste event for the first ⌘V after another app wrote the clipboard and
+    /// then insert nothing (`beforeinput` arrives, `input` never does); a second ⌘V with the same clipboard lands.
+    /// So a readable field that stayed exactly as it was gets the same paste once more, never a second time.
+    /// Anything less certain (a field that cannot be read or reads empty like a proxy, the focus gone elsewhere,
+    /// a change of any kind) is never repeated: a repeat there could only double the text.
+    private func verifyOrRepaste(_ payload: String, item: Item, verifier: PasteVerifier, token: String,
+                                 stillTarget: (@Sendable () -> Bool)?) {
+        let length = payload.utf16.count
+        let first = verifier.after(inserted: length, budgetMS: Self.chromiumMissMS)
+        guard first == .unchanged else {
+            if case .landed = first { ClipboardPaste.restoreNow(token: token) }
+            log("verify: paste \(first.label) (\(verifier.label))")
+            let status = first == .elsewhere ? "paste-elsewhere" : "paste-submitted"
+            queue.async { self.finish(item, status: status) }
+            return
+        }
+        // The press-time target rule, then the very field the first ⌘V went to, exactly as it was.
+        let sameField: @Sendable () -> Bool = { (stillTarget?() ?? true) && verifier.stillAsBefore() }
+        ClipboardPaste.repaste(token: token, targetPid: item.targetPid, stillTarget: sameField) { [weak self] status in
+            guard let self else { return }
+            guard case .pasteSubmitted = status else {
+                log("verify: paste unchanged, no second ⌘V (\(Self.statusString(status)))")
+                self.queue.async { self.finish(item, status: "paste-unchanged") }
+                return
+            }
+            self.verifyQueue.async {
+                let second = verifier.after(inserted: length) { miss in
+                    let status = miss == .elsewhere ? "paste-elsewhere" : miss == .unchanged ? "paste-unchanged" : "paste-submitted"
+                    self.queue.async { self.finish(item, status: status) }
+                }
+                // No early restore here: were the first ⌘V only late, it could land now and a restore would hand the
+                // second one the user's clipboard. The user's own ⌘V still gets theirs back at once (UserPasteWatch).
+                let doubled = second == .changedOtherwise && verifier.grewBy(2 * length)
+                log("verify: paste unchanged, second ⌘V \(doubled ? "DOUBLED" : second.label) (\(verifier.label))")
             }
         }
     }

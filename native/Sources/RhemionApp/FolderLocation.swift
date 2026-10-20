@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // One folder motif for the whole app: a folder is shown by its NAME (text colour)
 // and WHERE it lives, written the way Finder names places ("iCloud Drive", "Home", "Desktop", a volume's
 // name) in the secondary colour; the full path is only a hover tooltip. `FolderLocation` is the pure,

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // What's New — shown once after an update, filled from the release notes bundled with the app (the same file
 // that is published, so there is no second text to keep in sync). Never after a fresh install: there Welcome
 // comes first and everything is new. Re-openable from the menu bar ("What's New…") and from About.
@@ -93,7 +96,7 @@ final class WhatsNewWindowController: NSObject, NSWindowDelegate {
             let root = WhatsNewView(entry: entry, logoClock: logoClock,
                                     onGitHub: { NSWorkspace.shared.open(tag) },
                                     onContinue: { [weak self] in self?.window?.close() })
-            let hosting = NSHostingController(rootView: root)
+            let hosting = NSHostingController(rootView: root.themedRoot())
             hosting.sizingOptions = [.preferredContentSize]
             let window = NSWindow(contentViewController: hosting)
             window.title = "What's New in Rhemion"
@@ -201,16 +204,8 @@ struct WhatsNewView: View {
         HStack(spacing: 10) {
             TextLink(title: "Release Notes on GitHub", action: onGitHub)
             Spacer(minLength: 8)
-            Button(action: onContinue) {
-                Text("Continue").font(RhemionStyle.font(13, .semibold))
-                    .foregroundStyle(dark ? Color(rhemionHex: 0xE8D9A8) : Color(rhemionHex: 0x5A4410))
-                    .padding(.horizontal, 18).padding(.vertical, 9)
-                    .background(RhemionStyle.selected(dark), in: RoundedRectangle(cornerRadius: 9))
-                    .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(RhemionStyle.gold.opacity(dark ? 0.42 : 0.35), lineWidth: 1) }
-                    .shadow(color: .black.opacity(dark ? 0.20 : 0.05), radius: 1.5, y: 1)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.defaultAction)
+            PrimaryButton(title: "Continue", action: onContinue)
+                .keyboardShortcut(.defaultAction)
         }
         .padding(EdgeInsets(top: 14, leading: 28, bottom: 22, trailing: 28))
     }

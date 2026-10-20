@@ -33,7 +33,7 @@ The name comes from *rhēma*, Greek for the spoken word.
 - **Text lands where you started.** If you have moved on by the time the text is ready, it waits in the Journal instead of going into the wrong field, and Insert again puts it back.
 - **Pin to a window.** ⌥⌘P sends every dictation to one window while you work elsewhere.
 - **Journal only.** Hold Shift with the dictation key to save a thought without inserting it.
-- **On-device recognition.** NVIDIA Parakeet v3 running on your Mac through [FluidAudio](https://github.com/FluidInference/FluidAudio). The model (about 460 MB) is downloaded once.
+- **Speech models for your languages.** Tell Rhemion the languages you dictate in, and it recommends a model for them and downloads it once: NVIDIA Parakeet Ultra by default (about 630 MB, through [FluidAudio](https://github.com/FluidInference/FluidAudio)), Whisper Large v3 Turbo for 99 languages, Qwen3-ASR, or Apple Speech on macOS 26. Recognition runs on your Mac.
 - **Dictionary.** Teach it the words it keeps getting wrong: "Spoken as → Replace with". Add a word from a selection with ⌥⌘W; undo a replacement with ⇧⌥⌘L.
 - **Recall.** ⌥⌘R inserts the last dictation again.
 - **Journal.** Every dictation in one searchable list: copy it, replay it while the audio is kept, delete it. Optionally export transcripts to a folder of Markdown files, one per month.
@@ -43,7 +43,7 @@ The name comes from *rhēma*, Greek for the spoken word.
 
 - macOS 15 Sequoia or later
 - A Mac with Apple Silicon (M1 or later)
-- About 500 MB of free space for the app and the speech model
+- About 700 MB of free space for the app and the default speech model (Whisper needs about 600 MB more, Qwen3-ASR 1.5 GB)
 - An internet connection once, to download the speech model
 
 ## Install
@@ -100,7 +100,7 @@ Exported transcripts are never touched. A script cannot remove the login item: i
 
 ## Privacy
 
-Audio is recorded and recognized on your Mac and is not sent anywhere. Rhemion goes online only to download the speech model from Hugging Face, and it has no analytics. Details: [PRIVACY.md](PRIVACY.md).
+Audio is recorded and recognized on your Mac and is not sent anywhere. Rhemion goes online only to download a speech model from Hugging Face when you ask for it, and it has no analytics. Details: [PRIVACY.md](PRIVACY.md).
 
 ## Build from source
 
@@ -112,4 +112,4 @@ Bug reports and focused pull requests are welcome; see [CONTRIBUTING.md](CONTRIB
 
 ## License
 
-[MIT](LICENSE) © 2026 Sageathor. Third-party components and the speech model are credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Rhemion © 2026 Sageathor is licensed under the [Mozilla Public License 2.0](LICENSE) (versions 3.0 to 3.1 were MIT). You may use, change and redistribute it, also inside larger and commercial products; changes to Rhemion's own files are shared under the same license, and the copyright notices stay. See [NOTICE](NOTICE). Third-party components and the downloadable speech models have their own terms, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The name Rhemion is covered by the [trademark policy](TRADEMARK.md).

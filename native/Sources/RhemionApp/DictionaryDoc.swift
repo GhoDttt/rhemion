@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Dictionary — the personal word-replacement dictionary, owned by the app. There is no note and no
 // compiler: the app reads and writes the SAME snapshot the runtime applies:
 // $RHEMION_RUNTIME_DIR/active/dictionary.json (default: ~/.local/state/rhemion-v3/active/dictionary.json).
@@ -10,6 +13,7 @@
 // [variant, canonical] pairs. `bias` is parsed but not applied by the app; carried through untouched.
 
 import Foundation
+import RhemionStorage
 
 /// One grouped replacement: any of the comma-separated `variants` (what you say) becomes `canonical`
 /// (what it turns into). Identifiable for SwiftUI list editing.
@@ -28,15 +32,35 @@ struct DictionaryDoc: Equatable {
     var bias: [String] = []          // carried through unchanged (not applied, no UI yet)
 }
 
-/// Reads and writes active/dictionary.json. Never throws on read (missing/malformed → empty). Writes
-/// atomically, owner-only. Mirrors SettingsStore.
+/// Why the dictionary on screen isn't simply what dictionary.json holds.
+enum DictionaryReadIssue: Equatable {
+    /// dictionary.json could not be read; this is the version saved before it (`dictionary.previous.json`).
+    case restoredPrevious
+    /// dictionary.json could not be read and there is no earlier version.
+    case unreadable
+}
+
+/// Reads and writes active/dictionary.json. Never throws on read (missing → empty). A file that exists but
+/// can't be read is never written over: the next save moves it aside (`dictionary.unreadable-<time>.json`)
+/// first, and each save keeps the version it replaces as `dictionary.previous.json`. Writes atomically,
+/// owner-only. Mirrors SettingsStore.
 enum DictionaryStore {
     static var url: URL { AppPaths.stateDir.appendingPathComponent("active/dictionary.json", isDirectory: false) }
+    static func previousURL(_ file: URL) -> URL { file.deletingLastPathComponent().appendingPathComponent(StorageLayout.dictionaryPrevious) }
 
-    static func load() -> DictionaryDoc {
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return DictionaryDoc() }
+    static func load() -> DictionaryDoc { read().doc }
+
+    static func read(_ file: URL = url) -> (doc: DictionaryDoc, issue: DictionaryReadIssue?) {
+        guard FileManager.default.fileExists(atPath: file.path) else { return (DictionaryDoc(), nil) }
+        if let data = try? Data(contentsOf: file), let doc = parse(data) { return (doc, nil) }
+        if let data = try? Data(contentsOf: previousURL(file)), let doc = parse(data) { return (doc, .restoredPrevious) }
+        return (DictionaryDoc(), .unreadable)
+    }
+
+    /// The v1 snapshot's entries, or nil when the bytes aren't one.
+    static func parse(_ data: Data) -> DictionaryDoc? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["replacements"] == nil || object["replacements"] is [[String]] else { return nil }
         let rows = (object["replacements"] as? [[String]]) ?? []
         // Group flat [variant, canonical] pairs by canonical, preserving first-seen order, so the same
         // result shows as one row with its variants joined.
@@ -66,7 +90,7 @@ enum DictionaryStore {
     static let writesSuppressed = Locked(false)
 
     @discardableResult
-    static func save(_ doc: DictionaryDoc) -> Bool {
+    static func save(_ doc: DictionaryDoc, to url: URL = url) -> Bool {
         guard !writesSuppressed.value else {
             log("dictionary: save skipped — a storage operation is in progress")
             return false
@@ -90,6 +114,23 @@ enum DictionaryStore {
                                                  attributes: [.posixPermissions: 0o700])
         guard let data = try? JSONSerialization.data(withJSONObject: object,
                                                      options: [.prettyPrinted, .sortedKeys]) else { return false }
+        // Keep what is being replaced: a readable file becomes the previous version, an unreadable one is
+        // moved aside untouched (it may still hold the user's words), and the save stops if that fails.
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            if let current = try? Data(contentsOf: url), parse(current) != nil {
+                if current != data {
+                    try? current.write(to: previousURL(url), options: .atomic)
+                    try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: previousURL(url).path)
+                }
+            } else {
+                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+                let aside = directory.appendingPathComponent("\(StorageLayout.dictionaryUnreadablePrefix)\(stamp).json")
+                do { try fm.moveItem(at: url, to: aside) }
+                catch { log("dictionary: not saved, the unreadable file could not be moved aside: \(error.localizedDescription)"); return false }
+                log("dictionary: the unreadable file was moved aside to \(aside.lastPathComponent)")
+            }
+        }
         do {
             // .atomic renames onto url in one step: the runtime's DictionaryStore (which hot-reloads by
             // mtime) never sees a missing or half-written file, and a failed write keeps the prior one.

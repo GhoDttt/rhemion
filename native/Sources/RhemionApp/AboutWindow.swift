@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // About Rhemion — the identity window: the mark on the left; name, slogan, what it does, and the version
 // (with a quiet Copy for bug reports) on one aligned edge; the links in a footer bar with OK. Opened from the
 // menu-bar menu and from Rhemion › About Rhemion. One instance: choosing it again brings it forward.
@@ -8,7 +11,7 @@ import SwiftUI
 final class AboutWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let logoClock = WelcomeLogoClock()
-    /// Opens What's New (the link on the version line).
+    /// Opens What's New (the first link in the footer).
     var onWhatsNew: (() -> Void)?
 
     func show() {
@@ -16,7 +19,7 @@ final class AboutWindowController: NSObject, NSWindowDelegate {
             let root = AboutView(info: AboutInfo(bundle: .main), logoClock: logoClock,
                                  onClose: { [weak self] in self?.window?.close() },
                                  onWhatsNew: { [weak self] in self?.onWhatsNew?() })
-            let hosting = NSHostingController(rootView: root)
+            let hosting = NSHostingController(rootView: root.themedRoot())
             hosting.sizingOptions = [.preferredContentSize]
             let window = NSWindow(contentViewController: hosting)
             window.title = "About Rhemion"
@@ -64,7 +67,13 @@ struct AboutInfo: Equatable {
     static let releaseNotes = repository.appendingPathComponent("releases")
     static let reportIssue = repository.appendingPathComponent("issues/new/choose")
     static let privacy = repository.appendingPathComponent("blob/main/PRIVACY.md")
-    static let licenses = repository.appendingPathComponent("blob/main/THIRD_PARTY_NOTICES.md")
+    static let licensesOnline = repository.appendingPathComponent("blob/main/THIRD_PARTY_NOTICES.md")
+    /// The notices inside the app (Contents/Resources/Licenses, next to every license text), so they open offline;
+    /// the web copy only when a build lacks them.
+    static var licenses: URL {
+        Bundle.main.resourceURL.map { $0.appendingPathComponent("Licenses/THIRD_PARTY_NOTICES.txt") }
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } ?? licensesOnline
+    }
 }
 
 struct AboutView: View {
@@ -90,27 +99,32 @@ struct AboutView: View {
                         .foregroundStyle(RhemionStyle.secondary(dark)).padding(.top, 3)
                         .fixedSize(horizontal: false, vertical: true)
                     versionRow.padding(.top, 12)
-                    Text("© 2026 Sageathor · MIT License").font(RhemionStyle.font(11))
-                        .foregroundStyle(RhemionStyle.tertiary(dark)).padding(.top, 4)
+                    HStack(spacing: 0) {
+                        Text("© 2026 Sageathor · ").font(RhemionStyle.font(11))
+                            .foregroundStyle(RhemionStyle.tertiary(dark))
+                        TextLink(title: "Licenses & Notices", size: 11) { open(AboutInfo.licenses) }
+                            .accessibilityLabel("Licenses and Notices")
+                    }
+                    .padding(.top, 4)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(EdgeInsets(top: 4, leading: 28, bottom: 22, trailing: 28))
+            .padding(EdgeInsets(top: 18, leading: 28, bottom: 22, trailing: 28))
 
             HStack(spacing: 16) {
+                if let onWhatsNew { TextLink(title: "What's New", action: onWhatsNew) }
                 TextLink(title: "Release Notes") { open(AboutInfo.releaseNotes) }
                 TextLink(title: "Report an Issue") { open(AboutInfo.reportIssue) }
                 TextLink(title: "Privacy") { open(AboutInfo.privacy) }
                 TextLink(title: "Source Code") { open(AboutInfo.repository) }
-                TextLink(title: "Licenses") { open(AboutInfo.licenses) }
                 Spacer(minLength: 8)
-                RaisedButton(title: "OK", action: onClose).keyboardShortcut(.defaultAction)
+                RaisedButton(title: "OK", action: onClose).fixedSize().keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 28).padding(.vertical, 12)
             .background(RhemionStyle.rail(dark))
             .overlay(alignment: .top) { Rectangle().fill(RhemionStyle.line(dark)).frame(height: 1) }
         }
-        .frame(width: Self.width)
+        .frame(minWidth: Self.width)
         .background(RhemionStyle.content(dark))
         .background(Button("", action: onClose).keyboardShortcut(.cancelAction).hidden())
     }
@@ -130,9 +144,9 @@ struct AboutView: View {
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(QuietHoverStyle(dark: dark))
-            .help("Copy the version for a bug report")
-            if let onWhatsNew { TextLink(title: "What's New", action: onWhatsNew).padding(.leading, 4) }
+            .buttonStyle(QuietActionStyle(dark: dark))
+            .help("Copy the version and build for a bug report")
+            .accessibilityLabel(copied ? "Copied" : "Copy version and build")
         }
     }
 
@@ -142,7 +156,6 @@ struct AboutView: View {
                 .frame(width: 12)
             Text(copied ? "Copied" : "Copy").font(RhemionStyle.font(12, .semibold))
         }
-        .foregroundStyle(RhemionStyle.secondary(dark))
     }
 
     private func copyVersion() {
@@ -155,19 +168,3 @@ struct AboutView: View {
     private func open(_ url: URL) { NSWorkspace.shared.open(url) }
 }
 
-/// Quiet button (DESIGN.md "Quiet"): no surface until hovered, then a faint neutral wash.
-private struct QuietHoverStyle: ButtonStyle {
-    let dark: Bool
-    func makeBody(configuration: Configuration) -> some View { QuietHoverBody(configuration: configuration, dark: dark) }
-}
-
-private struct QuietHoverBody: View {
-    let configuration: ButtonStyleConfiguration
-    let dark: Bool
-    @State private var hover = false
-    var body: some View {
-        configuration.label
-            .background(hover || configuration.isPressed ? RhemionStyle.hover(dark) : .clear, in: RoundedRectangle(cornerRadius: 6))
-            .onHover { hover = $0 }
-    }
-}

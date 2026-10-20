@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Sign the runtime binary with the stable "Rhemion Dev" identity so its code signature — and thus
 # its macOS TCC microphone grant — stays constant across rebuilds. Without a stable signature,
 # `swift build`'s ad-hoc signing changes the CDHash every build and macOS silently revokes mic

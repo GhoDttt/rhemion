@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // AXSelection — best-effort read of the focused field's current text selection, for dict-add's
 // "as heard" seed. A ladder of strategies (each rung cheap, side-effect-free,
 // tried in order), and it must run BEFORE the panel opens, because the panel becomes frontmost and the
@@ -46,12 +49,23 @@ enum AXSelection {
     static func currentTarget() -> Target? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               let element = focusedElement(), !isSecure(element) else { return nil }
-        var selected = stringAttribute(element, kAXSelectedTextAttribute)
-        if nonBlank(selected) == nil, let range = selectedRange(element), range.length > 0 {
-            selected = stringForRange(element, range)
-        }
-        guard let selected, nonBlank(selected) != nil else { return nil }
+        guard let selected = selectedText(element), nonBlank(selected) != nil else { return nil }
         return Target(pid: app.processIdentifier, element: element, selected: selected)
+    }
+
+    /// The field captured at the hotkey has the focus again and still holds the same selection. Checked
+    /// before pasting a fix over it, so a selection that moved while the panel was open is never overwritten.
+    static func stillSelected(_ target: Target) -> Bool {
+        guard let element = focusedElement(), CFEqual(element, target.element) else { return false }
+        return selectedText(element) == target.selected
+    }
+
+    private static func selectedText(_ element: AXUIElement) -> String? {
+        let selected = stringAttribute(element, kAXSelectedTextAttribute)
+        if nonBlank(selected) == nil, let range = selectedRange(element), range.length > 0 {
+            return stringForRange(element, range)
+        }
+        return selected
     }
 
     enum FixResult: Sendable {

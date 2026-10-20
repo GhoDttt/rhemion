@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // RuntimeSupervisor — owns the app's OWN rhemion-runtime instance, isolated from any other
 // install. It spawns the runtime bundled at Contents/Helpers with the app's state/data env, drains
 // its pipes, restarts it with backoff if it dies, kills a runtime orphaned by a previous app crash,

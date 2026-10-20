@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Rhemion 3.0 — uninstaller. Removes what a drag-to-Trash leaves behind:
 # the app bundle, per-user config/state, recordings, preferences, and TCC grants.
 #
@@ -79,13 +82,21 @@ MODEL_CACHE="$HOME_DIR/Library/Application Support/FluidAudio/Models"
 # Rhemion's OWN downloaded models inside the shared FluidAudio cache — the only things in
 # MODEL_CACHE this script will ever remove (never the cache directory itself, never sibling
 # models belonging to other FluidAudio apps such as silero-vad or another app's own model).
-PARAKEET_MODELS="parakeet-tdt-0.6b-v3 parakeet-tdt-0.6b-v2"
+PARAKEET_MODELS="parakeet-ultra parakeet-tdt-0.6b-v3 parakeet-tdt-0.6b-v2"
+# The folder Rhemion downloads Whisper and Qwen3-ASR into, and the files it downloads there (ModelCatalog).
+# Other model files in it may belong to other apps: only these names, and what an interrupted download
+# leaves (.download-*, .*.partial), are removed.
+WHISPER_DIR="$HOME_DIR/.local/share/whisper"
+RHEMION_DOWNLOADS="ggml-large-v3-turbo-q5_0.bin Qwen3-ASR-1.7B-Q5_K_M.gguf"
 # The app's own runtime temp folder (mirrors AppPaths.resolvedTemporaryDirectory() +
 # StorageLayout.tmpRoot: realpath(system temp)/<bundle id>). This is OUTSIDE HOME_DIR — the system
 # temp dir is per-user but not under $HOME — so it can't be derived from HOME_DIR like everything
 # else above. Computing the path is harmless (read-only); only its removal is a real effect, and
 # that's routed through sys() below, so test mode never touches the real machine's temp dir.
 TMP_ROOT="$(realpath "${TMPDIR:-/tmp}" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}")/${APP_ID}"
+# The cache folder macOS keeps for the app beside the temp one (Metal's compiled shaders); outside HOME_DIR
+# too, so its removal also goes through sys().
+USER_CACHE_DIR="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null)"
 
 MODE=""          # keep-data | purge
 PURGE_MODEL=0
@@ -216,6 +227,12 @@ echo "  tccutil reset Microphone: exit $?"
 sys /usr/bin/tccutil reset Microphone "$RUNTIME_ID" 2>/dev/null
 echo "  tccutil reset Microphone (helper): exit $? (non-zero = no entry)"
 
+# --- Apple Speech language packs: macOS holds them for Rhemion's runtime; let it give them back while it exists ---
+if [ -x "$APP_PATH/Contents/Helpers/rhemion-runtime" ]; then
+  sys "$APP_PATH/Contents/Helpers/rhemion-runtime" --release-speech-packs 2>/dev/null
+  echo "  released Apple Speech language packs: exit $?"
+fi
+
 # --- app data (StorageLayout.applicationData — settings/logs/prefs/cache/saved-state/temp) ---
 # Removed in EVERY mode: this is the app's own bookkeeping, not your content. Mirrors exactly what
 # the in-app uninstaller's "Uninstall, keep my data" option removes (see StorageLayout.swift
@@ -236,6 +253,10 @@ rm_path "history-retention-last-run" "$STATE_DIR/history-retention-last-run"
 for stray in "$STATE_DIR"/.history-retention-*.tmp "$STATE_DIR"/.export-last-run-*.tmp; do
   [ -e "$stray" ] && rm_path "stray temp" "$stray"
 done
+# What each local model file said about itself, cached per file (every version of the cache).
+for profiles in "$STATE_DIR"/model-profiles-*.json; do
+  [ -e "$profiles" ] && rm_path "model descriptions cache" "$profiles"
+done
 if sys /usr/bin/defaults delete "$APP_ID" 2>/dev/null; then echo "  cleared defaults ($APP_ID)"; fi
 rm_path "preferences"         "$PREFS"
 rm_path "caches"              "$CACHES"
@@ -243,6 +264,10 @@ rm_path "runtime model cache" "$RUNTIME_CACHE"
 rm_path "saved state"         "$SAVED_STATE"
 echo "  runtime temp: $TMP_ROOT"
 sys rm -rf "$TMP_ROOT" 2>/dev/null
+if [ -n "$USER_CACHE_DIR" ]; then
+  echo "  system cache: ${USER_CACHE_DIR%/}/${APP_ID}"
+  sys rm -rf "${USER_CACHE_DIR%/}/${APP_ID}" 2>/dev/null
+fi
 
 # --- your content (dictionary, transcripts, recordings, legacy data, export registry) ---
 # Kept in --keep-data (the whole point of that mode); erased only in --purge. Note this script never
@@ -259,10 +284,16 @@ fi
 
 # --- Rhemion's own downloaded model (opt-in only; never the shared cache) ---
 if [ "$MODE" = "purge" ]; then
-  if [ "$PURGE_MODEL" = "1" ] || { [ -d "$MODEL_CACHE" ] && confirm "Also delete the downloaded speech-recognition model (parakeet)? Other FluidAudio apps' models (e.g. silero-vad) are left alone."; }; then
-    echo "removing downloaded model…"
+  if [ "$PURGE_MODEL" = "1" ] || { { [ -d "$MODEL_CACHE" ] || [ -d "$WHISPER_DIR" ]; } && confirm "Also delete the speech models Rhemion downloaded (Parakeet, Whisper, Qwen3-ASR)? Other apps' models are left alone."; }; then
+    echo "removing downloaded models…"
     for m in $PARAKEET_MODELS; do
       rm_path "model: $m" "$MODEL_CACHE/$m"
+    done
+    for f in $RHEMION_DOWNLOADS; do
+      rm_path "model: $f" "$WHISPER_DIR/$f"
+    done
+    for left in "$WHISPER_DIR"/.download-* "$WHISPER_DIR"/.*.partial; do
+      [ -e "$left" ] && rm_path "interrupted download" "$left"
     done
   else
     [ -d "$MODEL_CACHE" ] && echo "  kept model cache: $MODEL_CACHE (parakeet folders untouched)"

@@ -1,6 +1,9 @@
-// Settings pane for the hub. The flat single-Form settings window is reorganized into a
-// category sidebar (General / Shortcuts / Audio & Model / Recording / Journal) + a native grouped Form
-// per category. Controls are native SwiftUI form rows, regrouped by category.
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Settings pane for the hub: a category sidebar (General / Shortcuts / Models / Audio / Recording / Journal /
+// Advanced) and, per category, a flat page (FlatForm): no cards, groups under 13 Bold headers, hairlines
+// between rows. Controls are SwiftUI rows, regrouped by category.
 //
 // Apply-on-change (System Settings style): every edit calls `model.apply`, which persists the snapshot
 // and re-applies live. Labels are English (command-labels-English); the recognition LANGUAGE options
@@ -11,11 +14,12 @@ import SwiftUI
 import RhemionIPC
 import RhemionStorage
 
-/// The five settings categories, in sidebar order.
+/// The settings categories, in sidebar order.
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general = "General"
     case shortcuts = "Shortcuts"
-    case audio = "Audio & Model"
+    case models = "Models"
+    case audio = "Audio"
     case recording = "Recording"
     case journal = "Journal"
     case advanced = "Advanced"
@@ -24,8 +28,9 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "slider.horizontal.3"
         case .shortcuts: return "keyboard"
-        case .audio: return "waveform"
-        case .recording: return "mic"
+        case .models: return "brain"
+        case .audio: return "mic"
+        case .recording: return "waveform"
         case .journal: return "book.closed"
         case .advanced: return "wrench.and.screwdriver"
         }
@@ -42,6 +47,8 @@ struct HubSettingsPane: View {
     /// Whether the registry owns files in the current export folder (shows the delete action). Refreshed
     /// when the Journal category appears, when the folder changes and after a deletion — not per render.
     @State private var exportOwned = false
+    /// The settings before the last restore, offered back for a few seconds ("Restored · Undo").
+    @State private var undoRestore: (category: SettingsCategory, before: AppSettings)?
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
 
@@ -54,9 +61,7 @@ struct HubSettingsPane: View {
         HStack(spacing: 0) {
             categorySidebar
             Divider().overlay(RhemionStyle.line(dark))
-            Form { sections }
-                .formStyle(.grouped)
-                .contentMargins(.bottom, 24, for: .scrollContent)   // the last footer keeps air above the window edge
+            FlatForm(dark: dark) { sections }   // flat Settings: no cards, hairlines between rows (FlatForm.swift)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // Settings is Equatable, so this fires once per edit; the app persists + live-applies it.
@@ -82,15 +87,20 @@ struct HubSettingsPane: View {
                                             restore: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if let caption {
-                HStack(spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(caption).font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.secondary(dark))
                         .multilineTextAlignment(.leading)
-                    if let link { TextLink(title: link.title, action: link.action) }
+                    if let link { TextLink(title: link.title, size: 11, action: link.action) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if restore, isDirty(model.settingsCategory) {
-                TextLink(title: "Restore defaults", systemImage: "arrow.counterclockwise") { self.restore(model.settingsCategory) }
+            if restore, let undo = undoRestore, undo.category == model.settingsCategory {
+                HStack(spacing: 6) {
+                    Text("Restored").font(RhemionStyle.font(12.5)).foregroundStyle(RhemionStyle.secondary(dark))
+                    TextLink(title: "Undo") { settings = undo.before; undoRestore = nil }
+                }
+            } else if restore, let title = Self.restoreTitle(model.settingsCategory), isDirty(model.settingsCategory) {
+                TextLink(title: title, systemImage: "arrow.counterclockwise") { self.restore(model.settingsCategory) }
             }
         }
         // Always from the card's left edge: a short footer (only Restore defaults) used to sit off to the side.
@@ -132,6 +142,7 @@ struct HubSettingsPane: View {
         switch model.settingsCategory {
         case .general:    generalSection
         case .shortcuts:  shortcutsSection
+        case .models:     modelsSection
         case .audio:      audioSection
         case .recording:  recordingSection
         case .journal:    journalSection
@@ -140,9 +151,12 @@ struct HubSettingsPane: View {
     }
 
     @ViewBuilder private var generalSection: some View {
-        Section {
+        FlatSection {
+            speechModelRow
+        } header: { groupHeader("Dictation") }
+        FlatSection {
             SettingRow(title: "Launch at login", description: "Start Rhemion when you sign in.") {
-                Toggle("", isOn: $settings.launchAtLogin).labelsHidden()
+                Toggle("", isOn: $settings.launchAtLogin).labelsHidden().controlSize(.small)
             }
             SettingRow(title: "Dictation key", description: "\(dictationKeyNames.joined(separator: " or ")). Hold to dictate; release to insert.") {
                 TextLink(title: "Change in Shortcuts ›") { model.settingsCategory = .shortcuts }
@@ -151,17 +165,13 @@ struct HubSettingsPane: View {
                 BoxedPicker(selection: $settings.inputMethod,
                             options: AppSettings.inputMethodOptions.map { SettingsChoice(id: $0, label: Self.inputLabel($0)) })
             }
-            SettingRow(title: "Recognition language", description: "Auto detects, or force one language.") {
-                BoxedPicker(selection: $settings.language,
-                            options: AppSettings.languageOptions.map { SettingsChoice(id: $0, label: Self.languageLabel($0)) })
-            }
         } header: { groupHeader("Startup & input") }
-        Section {
+        FlatSection {
             SettingRow(title: "When dictation starts", description: "With a window pinned (⌥⌘P or the menu-bar menu): stay in it, or put the text there and come back.") {
                 BoxedPicker(selection: $settings.pinMode, options: [SettingsChoice(id: "stay", label: "Go to the pinned window"), SettingsChoice(id: "return", label: "Insert there, come back")])
             }
             SettingRow(title: "Unpin automatically", description: "Release the pin after a while, even if you don't.") {
-                Toggle("", isOn: $settings.pinAutoUnpin).labelsHidden()
+                Toggle("", isOn: $settings.pinAutoUnpin).labelsHidden().controlSize(.small)
             }
             if settings.pinAutoUnpin {
                 SettingRow(title: "Unpin after", description: "Counted from the moment you pinned.") {
@@ -169,8 +179,12 @@ struct HubSettingsPane: View {
                 }
             }
         } header: { groupHeader("Pinned window") }
-        Section {
-            SettingRow(title: "Theme", description: "Light, dark, or follow the system.") {
+        FlatSection {
+            SettingRow(title: "Theme", description: "The look of Rhemion's windows.") {
+                BoxedPicker(selection: $settings.themeFamily,
+                            options: ThemeFamily.all.map { SettingsChoice(id: $0.id, label: $0.name) })
+            }
+            SettingRow(title: "Appearance", description: "Light, dark, or follow the system.") {
                 ThemeSegmented(selection: $settings.theme)
             }
             SettingRow(title: "Recording indicator", description: "Where the orb appears while recording. Auto uses the notch on notched Macs, otherwise a floating pill.") {
@@ -180,11 +194,38 @@ struct HubSettingsPane: View {
         } header: { groupHeader("Appearance") } footer: { sectionFooter() }
     }
 
+    /// Speech model: the models on this Mac, then "Download more models…"; under it your
+    /// languages, or what the model misses, and the way to Models with the languages list open.
+    private var speechModelRow: some View {
+        let rows = ModelsCatalog.rows(models: model.models, settings: settings)
+        let inUse = ModelsCatalog.inUseID(rows, selected: settings.model)
+        let caption = ModelsCatalog.caption(languages: settings.dictationLanguages, rows: rows,
+                                            inUse: rows.first { $0.id == inUse })
+        let options = rows.filter(\.found).map { SettingsChoice(id: $0.id, label: $0.name) }
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Speech model").font(RhemionStyle.font(13)).foregroundStyle(RhemionStyle.text(dark))
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(caption + " ·").font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.secondary(dark))
+                    TextLink(title: "Change in Models ›", size: 11) {
+                        model.openLanguagesPicker = true
+                        model.settingsCategory = .models
+                    }
+                }
+            }
+            Spacer(minLength: 12)
+            BoxedPicker(selection: Binding(get: { inUse ?? settings.model }, set: { settings.model = $0 }),
+                        options: options, width: hubKeyField,
+                        trailing: ("Download more models…", false, { model.settingsCategory = .models }))
+        }
+        .padding(.vertical, 3)
+    }
+
     /// Shortcuts (3.1): every keyboard
     /// action, in the order you meet it in a dictation. Gestures follow the dictation key, cannot be re-recorded and
-    /// switch on or off; chords are recorded. A single key is written as its name, chords as symbols (DESIGN.md).
+    /// switch on or off; chords are recorded. A single key is written as its name, chords as symbols.
     @ViewBuilder private var shortcutsSection: some View {
-        Section {
+        FlatSection {
             pttBindings
             gestureRow("Hands-free", "Double-tap to keep recording. Tap again to stop; long silence stops it too.",
                        groups: dictationKeyNames.map { [$0] }, suffix: "twice", isOn: $settings.handsFreeEnabled)
@@ -196,18 +237,25 @@ struct HubSettingsPane: View {
                 gestureRow("Journal only", "Save the text to the Journal; nothing is inserted.",
                            groups: dictationKeyNames.map { [mod.name, $0] }, suffix: nil, isOn: $settings.journalOnlyEnabled)
             }
-        } header: { groupHeader("While you speak") } footer: { sectionFooter(restore: false) }
-        Section {
+        } header: { groupHeader("While you speak") } footer: {
+            if settings.pttKeys.contains("fn"), let conflict = GlobeKey.conflict {
+                sectionFooter("The Globe key also \(conflict).", link: ("Set it to Do Nothing ›", GlobeKey.openKeyboardSettings),
+                              restore: false)
+            } else {
+                sectionFooter(restore: false)
+            }
+        }
+        FlatSection {
             gestureRow("Erase", "Remove the text just inserted, within \(settings.undoTTLSecs) s.",
                        groups: [["Esc"]], suffix: "twice", isOn: $settings.escEraseEnabled)
             hotkeyBindings("Undo replacement", "Put back what you said before the dictionary changed it.", $settings.undoHotkeys)
         } header: { groupHeader("Right after") } footer: { sectionFooter(restore: false) }
-        Section {
+        FlatSection {
             hotkeyBindings("Recall", "Insert your last dictation again, even one you canceled or erased.", $settings.recallHotkeys)
             hotkeyBindings("Pin to this window", "Send every dictation to the window you are in; again to unpin.", $settings.pinHotkeys)
             hotkeyBindings("Add to dictionary", "Teach Rhemion the selected word.", $settings.dictAddHotkeys)
         } header: { groupHeader("Anytime") } footer: { sectionFooter(restore: false) }
-        Section {
+        FlatSection {
             SettingRow(title: "Leave double Esc to", description: "In these apps Esc twice goes to the app, never to Rhemion.", field: true) {
                 AppBindingStack(bundleIDs: $settings.escExceptionApps)
             }
@@ -223,10 +271,10 @@ struct HubSettingsPane: View {
 
     /// A gesture: its keys on the row (no field border: not editable), and its switch.
     private func gestureRow(_ title: String, _ description: String, groups: [[String]], suffix: String?, isOn: Binding<Bool>) -> some View {
-        SettingRow(title: title, description: description) {
+        SettingRow(title: title, description: description, fit: true) {
             HStack(spacing: 10) {
                 GestureKeys(groups: groups, suffix: suffix, dark: dark)
-                Toggle("", isOn: isOn).labelsHidden()
+                Toggle("", isOn: isOn).labelsHidden().controlSize(.small)
             }
         }
     }
@@ -236,52 +284,63 @@ struct HubSettingsPane: View {
 
     // The dictation key — one or more device modifiers; any of them starts dictation.
     private var pttBindings: some View {
-        SettingRow(title: "Dictation key", description: "Hold to dictate; release to insert.", field: true) {
+        SettingRow(title: "Dictation key", description: "Hold to dictate; release to insert.", keys: true) {
             PTTBindingStack(keys: $settings.pttKeys, label: Self.pttLabel)
         }
     }
 
     // A global chord action — one or more chords; any of them fires it.
     private func hotkeyBindings(_ title: String, _ description: String, _ specs: Binding<[String]>) -> some View {
-        SettingRow(title: title, description: description, field: true) {
-            HotkeyBindingStack(specs: specs, onBeginRecording: model.beginRecording, onEndRecording: model.endRecording)
+        SettingRow(title: title, description: description, keys: true) {
+            HotkeyBindingStack(specs: specs, owner: { chordOwner($0, row: $1, in: title) },
+                               onBeginRecording: model.beginRecording, onEndRecording: model.endRecording)
         }
     }
 
-    @ViewBuilder private var audioSection: some View {
-        Section {
-            SettingRow(title: "Recognition model", description: "The engine that turns speech into text.") {
-                BoxedPicker(selection: $settings.model, options: modelChoices)
+    /// One chord, one action: the action that already uses `spec` (compared as displayed, so modifier order and
+    /// aliases do not matter), or nil. Another row of the same action counts too.
+    private func chordOwner(_ spec: String, row: Int, in action: String) -> String? {
+        let key = HotkeySpec.display(spec)
+        let actions: [(String, [String])] = [("Undo replacement", settings.undoHotkeys), ("Recall", settings.recallHotkeys),
+                                             ("Pin to this window", settings.pinHotkeys), ("Add to dictionary", settings.dictAddHotkeys)]
+        for (name, specs) in actions {
+            for (i, other) in specs.enumerated() where !HotkeySpec.isDisabled(other) && HotkeySpec.display(other) == key {
+                if name == action && i == row { continue }
+                return name
             }
-            SettingRow(title: "Speech model (Parakeet)",
-                       description: "Download the on-device recognition engine once (~\(model.modelDownload.approxSizeMB) MB). Works offline afterward; audio and transcripts stay on your Mac.",
-                       wide: true) {
-                SpeechModelSettingValue(model: model.modelDownload)
-            }
-            SettingRow(title: "Microphone", description: "Automatic picks the best available input.") {
-                BoxedPicker(selection: $settings.audioMicrophone, options: micChoices)
-            }
-        } header: { groupHeader("Recognition") } footer: {
-            Text("The model and microphone apply from your next dictation, no restart.")
-                .font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.secondary(dark)).textCase(nil)
         }
-        Section {
-            SettingRow(title: "Whisper binary", description: "Used only for the Whisper engine.", field: true) {
-                PathField(path: $settings.whisperBinary, placeholder: "Choose file…",
-                          chooseDirectory: false, canRemove: false, clearOrRemove: { settings.whisperBinary = "" })
-            }
-            SettingRow(title: "Model folders", description: "Extra folders scanned for Whisper models.", field: true) {
+        return nil
+    }
+
+    /// Models (3.2): your languages, the models that cover them and the rest (ModelsPage.swift), then the extra
+    /// folders scanned for model files (Whisper .bin, Qwen .gguf). Whisper runs in the helper inside Rhemion, so its
+    /// binary is no longer a setting; `whisper_binary` in the settings file only matters to a build
+    /// without the helper.
+    @ViewBuilder private var modelsSection: some View {
+        ModelsPage(settings: $settings, hub: model)
+        FlatSection {
+            SettingRow(title: "Model folders", description: "Extra folders Rhemion looks in for speech models.", field: true) {
                 PathBindingStack(initial: modelDirList, placeholder: "Choose folder…") { list in
                     settings.modelDirs = list.filter { !$0.isEmpty }.joined(separator: ":")
                 }
             }
-        } header: { groupHeader("Whisper") } footer: {
-            sectionFooter("Whisper only — Parakeet loads from its own cache, no path needed. Extra folders are scanned for whisper models; a newly found one appears in the picker, but using it takes effect after you restart Rhemion (switching between already-loaded models applies on your next dictation).")
+        } header: { groupHeader("Model files") } footer: {
+            sectionFooter("A model found in a new folder can be used after you restart Rhemion.")
+        }
+    }
+
+    @ViewBuilder private var audioSection: some View {
+        FlatSection {
+            SettingRow(title: "Microphone", description: "Automatic picks the best available input.") {
+                BoxedPicker(selection: $settings.audioMicrophone, options: micChoices)
+            }
+        } header: { groupHeader("Input") } footer: {
+            sectionFooter("The microphone applies from your next dictation.")
         }
     }
 
     @ViewBuilder private var recordingSection: some View {
-        Section {
+        FlatSection {
             SettingRow(title: "Double-Esc window", description: "Max gap between the two Esc presses.") {
                 StepperBox(value: $settings.escDoubleTapMS, range: 200...600, step: 50) { "\($0) ms" }
             }
@@ -292,7 +351,7 @@ struct HubSettingsPane: View {
             Text("Press Esc twice within this window to cancel a recording, or erase the just-inserted text.")
                 .font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.secondary(dark)).textCase(nil)
         }
-        Section {
+        FlatSection {
             SettingRow(title: "Silence before countdown", description: "Silence this long starts the auto-stop countdown.") {
                 StepperBox(value: $settings.handsfreeCountdownAfterSecs, range: 5...600, step: 5) { "\($0) s" }
             }
@@ -305,7 +364,7 @@ struct HubSettingsPane: View {
     }
 
     @ViewBuilder private var journalSection: some View {
-        Section {
+        FlatSection {
             SettingRow(title: "Export mode", description: "When transcripts are written to the folder. Off disables export entirely.") {
                 BoxedPicker(selection: exportModeBinding,
                             options: [SettingsChoice(id: "auto", label: "Auto"), SettingsChoice(id: "manual", label: "Manual"), SettingsChoice(id: "scheduled", label: "Scheduled"), SettingsChoice(id: "off", label: "Off")])
@@ -331,9 +390,9 @@ struct HubSettingsPane: View {
         } header: { groupHeader("Export") }
         .onAppear { refreshExportOwned() }
         .onChange(of: settings.exportDir) { _, _ in refreshExportOwned() }
-        Section {
+        FlatSection {
             SettingRow(title: "Keep canceled dictations", description: "A recording you cancel with Esc twice stays in the Journal, so a cancel by mistake can be brought back.") {
-                Toggle("", isOn: $settings.keepCanceled).labelsHidden()
+                Toggle("", isOn: $settings.keepCanceled).labelsHidden().controlSize(.small)
             }
             if settings.keepCanceled {
                 SettingRow(title: "Keep them for", description: "Canceled entries are deleted after this; ordinary entries follow Cleanup.") {
@@ -343,7 +402,7 @@ struct HubSettingsPane: View {
         } header: { groupHeader("Canceled dictations") } footer: {
             sectionFooter("Recordings shorter than a second are never kept. Audio and text stay on this Mac, like every Journal entry.", restore: false)
         }
-        Section {
+        FlatSection {
             retentionRow("Keep local audio", "Delete recordings older than this.", value: $settings.audioRetentionValue, unit: $settings.audioRetentionUnit)
             retentionRow("Keep transcripts", "Delete entries older than this.", value: $settings.transcriptRetentionValue, unit: $settings.transcriptRetentionUnit)
         } header: { groupHeader("Cleanup") } footer: {
@@ -353,81 +412,66 @@ struct HubSettingsPane: View {
 
     // MARK: restore-defaults (per category, shown only when dirty)
 
+    /// Restore lives only where a reset is a real fix: Shortcuts and Recording's timings.
+    /// Elsewhere every control shows its own default, and a one-click wipe of export or Whisper setup did harm.
+    private static func restoreTitle(_ category: SettingsCategory) -> String? {
+        switch category {
+        case .shortcuts: return "Restore default shortcuts"
+        case .recording: return "Reset timings"
+        default: return nil
+        }
+    }
+
+    /// Compared as they act, not as stored: a chord is equal to its default however its keys were spelled.
     private func isDirty(_ category: SettingsCategory) -> Bool {
         let d = AppSettings()
+        func chords(_ specs: [String]) -> [String] { specs.map(HotkeySpec.display) }
         switch category {
-        case .general:
-            return settings.launchAtLogin != d.launchAtLogin
-                || settings.inputMethod != d.inputMethod || settings.language != d.language
-                || settings.theme != d.theme || settings.indicatorStyle != d.indicatorStyle
-                || settings.pinMode != d.pinMode || settings.pinAutoUnpin != d.pinAutoUnpin || settings.pinAutoUnpinMinutes != d.pinAutoUnpinMinutes
         case .shortcuts:
-            return settings.recallHotkeys != d.recallHotkeys || settings.dictAddHotkeys != d.dictAddHotkeys || settings.pinHotkeys != d.pinHotkeys
-                || settings.undoHotkeys != d.undoHotkeys || settings.pttKeys != d.pttKeys
+            return chords(settings.recallHotkeys) != chords(d.recallHotkeys) || chords(settings.dictAddHotkeys) != chords(d.dictAddHotkeys)
+                || chords(settings.pinHotkeys) != chords(d.pinHotkeys) || chords(settings.undoHotkeys) != chords(d.undoHotkeys)
+                || settings.pttKeys != d.pttKeys
                 || settings.handsFreeEnabled != d.handsFreeEnabled || settings.escCancelEnabled != d.escCancelEnabled
                 || settings.escEraseEnabled != d.escEraseEnabled || settings.journalOnlyEnabled != d.journalOnlyEnabled
-                || settings.escExceptionApps != d.escExceptionApps
-        case .audio:
-            return settings.model != d.model || settings.audioMicrophone != d.audioMicrophone
-                || settings.whisperBinary != d.whisperBinary || settings.modelDirs != d.modelDirs
         case .recording:
             return settings.escDoubleTapMS != d.escDoubleTapMS || settings.undoTTLSecs != d.undoTTLSecs
                 || settings.handsfreeCountdownAfterSecs != d.handsfreeCountdownAfterSecs
                 || settings.handsfreeCountdownSecs != d.handsfreeCountdownSecs
-        case .journal:
-            return settings.exportMode != d.exportMode
-                || settings.exportSchedule != d.exportSchedule || settings.exportDir != d.exportDir
-                || settings.audioRetentionValue != d.audioRetentionValue || settings.audioRetentionUnit != d.audioRetentionUnit
-                || settings.transcriptRetentionValue != d.transcriptRetentionValue || settings.transcriptRetentionUnit != d.transcriptRetentionUnit
-                || settings.keepCanceled != d.keepCanceled || settings.keepCanceledHours != d.keepCanceledHours
-        case .advanced:
-            return false   // Diagnostics + Storage: nothing to restore
+        default:
+            return false
         }
     }
 
+    /// Applies at once and offers Undo for 8 s in the link's place. The app exception list is your own list, not a
+    /// preference: Shortcuts' restore leaves it alone.
     private func restore(_ category: SettingsCategory) {
         let d = AppSettings()
+        let before = settings
         switch category {
-        case .general:
-            settings.launchAtLogin = d.launchAtLogin
-            settings.inputMethod = d.inputMethod; settings.language = d.language; settings.theme = d.theme
-            settings.indicatorStyle = d.indicatorStyle
-            settings.pinMode = d.pinMode; settings.pinAutoUnpin = d.pinAutoUnpin; settings.pinAutoUnpinMinutes = d.pinAutoUnpinMinutes
         case .shortcuts:
             settings.recallHotkeys = d.recallHotkeys; settings.dictAddHotkeys = d.dictAddHotkeys; settings.pinHotkeys = d.pinHotkeys
             settings.undoHotkeys = d.undoHotkeys; settings.pttKeys = d.pttKeys
             settings.handsFreeEnabled = d.handsFreeEnabled; settings.escCancelEnabled = d.escCancelEnabled
             settings.escEraseEnabled = d.escEraseEnabled; settings.journalOnlyEnabled = d.journalOnlyEnabled
-            settings.escExceptionApps = d.escExceptionApps
-        case .audio:
-            settings.model = d.model; settings.audioMicrophone = d.audioMicrophone
-            settings.whisperBinary = d.whisperBinary; settings.modelDirs = d.modelDirs
         case .recording:
             settings.escDoubleTapMS = d.escDoubleTapMS; settings.undoTTLSecs = d.undoTTLSecs
             settings.handsfreeCountdownAfterSecs = d.handsfreeCountdownAfterSecs
             settings.handsfreeCountdownSecs = d.handsfreeCountdownSecs
-        case .journal:
-            settings.exportMode = d.exportMode
-            settings.exportSchedule = d.exportSchedule; settings.exportDir = d.exportDir; settings.exportInitialized = false
-            settings.audioRetentionValue = d.audioRetentionValue; settings.audioRetentionUnit = d.audioRetentionUnit
-            settings.transcriptRetentionValue = d.transcriptRetentionValue; settings.transcriptRetentionUnit = d.transcriptRetentionUnit
-            settings.keepCanceled = d.keepCanceled; settings.keepCanceledHours = d.keepCanceledHours
-        case .advanced:
-            break
+        default:
+            return
+        }
+        undoRestore = (category, before)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            if undoRestore?.before == before { undoRestore = nil }
         }
     }
 
+
     @ViewBuilder private var advancedSection: some View {
-        Section {
+        FlatSection {
             SettingRow(title: "Application log", description: "Open the app's log file for troubleshooting.", wide: true) {
-                Button { NSWorkspace.shared.open(AppPaths.logURL) } label: {
-                    Label("Open app.log", systemImage: "doc.text").font(RhemionStyle.font(12, .medium))
-                        .foregroundStyle(RhemionStyle.text(dark))
-                        .padding(.horizontal, 11).padding(.vertical, 6)
-                        .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
-                        .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
-                }.buttonStyle(.plain).fixedSize()
+                RaisedButton(title: "Open app.log", systemImage: "doc.text") { NSWorkspace.shared.open(AppPaths.logURL) }
+                    .fixedSize()
             }
         } header: { groupHeader("Diagnostics") }
         StorageSection(model: storage, activity: model.storageActivity, dark: dark,
@@ -437,20 +481,6 @@ struct HubSettingsPane: View {
     }
 
     // MARK: option lists + folder pickers (ported from the flat settings window)
-
-    // Installed models the runtime can run, plus the current selection kept selectable even if the list
-    // hasn't arrived yet or the saved model isn't present (so the Picker never blanks).
-    private var modelChoices: [SettingsChoice] {
-        var out: [SettingsChoice] = []
-        var seen = Set<String>()
-        for m in model.models where m.found && seen.insert(m.id).inserted {
-            out.append(SettingsChoice(id: m.id, label: m.label))
-        }
-        if seen.insert(settings.model).inserted {
-            out.append(SettingsChoice(id: settings.model, label: model.models.first { $0.id == settings.model }?.label ?? settings.model))
-        }
-        return out
-    }
 
     // "Automatic" + every connected input device, plus the saved device if it isn't currently present
     // (marked unavailable) so the Picker keeps showing the user's choice.
@@ -580,17 +610,15 @@ struct HubSettingsPane: View {
         }
     }
 
-    private static func languageLabel(_ language: String) -> String {
-        switch language {
-        case "auto": return "Auto"
-        case "ru":   return "Russian"
-        case "en":   return "English"
-        default:     return language
-        }
-    }
 }
 
-private struct SettingsChoice: Identifiable, Hashable { let id: String; let label: String }
+struct SettingsChoice: Identifiable, Hashable {
+    let id: String; let label: String
+    /// Shown greyed with this note and not pickable (a dictation key another row already uses).
+    var takenNote: String? = nil
+    /// A note on the right that does not block the pick ("Set Globe to Do Nothing").
+    var hint: String? = nil
+}
 
 /// The trailing zone width for compact controls (pickers, toggle, steppers).
 let hubZone: CGFloat = 190
@@ -605,17 +633,27 @@ let hubStackGap: CGFloat = 6   // field ↔ "+" and row ↔ row in a stack
 /// "+" beside the LAST field ends exactly where a single field ends.
 let hubStackField: CGFloat = hubFieldColumn - hubStackGap - hubPlus
 let hubFieldHeight: CGFloat = 30
+/// A shortcut recorder or dictation-key picker: as wide as the widest value it can hold, not the path column.
+/// The widest chord, ⌃⌥⇧⌘W, measures 142 pt in caps; with padding 9, the gap and the × it needs 186. The
+/// longest dictation key, "Right Command", needs about 155. So it is the compact zone's 190.
+let hubKeyField: CGFloat = 190
+/// A key stack: the field plus the square "+" beside the last one.
+let hubKeyColumn: CGFloat = hubKeyField + hubStackGap + hubPlus
 
 /// A settings row: title + one-line description on the left, a trailing control on the right (matches
 /// the inset-grouped rows).
 /// - `field`: the control sits in THE field column (`hubFieldColumn`, path + shortcut fields).
 /// - `wide`: the control fills the available row width (the speech-model row, the log button).
 /// - otherwise it sits in the compact `hubZone`-wide trailing zone, right-aligned.
-private struct SettingRow<Control: View>: View {
+struct SettingRow<Control: View>: View {
     let title: String
     var description: String? = nil
     var wide: Bool = false
     var field: Bool = false
+    /// The control is a key stack (`hubKeyColumn`).
+    var keys: Bool = false
+    /// The control keeps its own width and never squeezes (gesture key caps); the description wraps instead.
+    var fit: Bool = false
     @ViewBuilder let control: () -> Control
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
@@ -631,6 +669,10 @@ private struct SettingRow<Control: View>: View {
             Spacer(minLength: 12)
             if field {
                 control().frame(width: hubFieldColumn, alignment: .leading)
+            } else if keys {
+                control().frame(width: hubKeyColumn, alignment: .leading)
+            } else if fit {
+                control().fixedSize()
             } else {
                 control()
                     .layoutPriority(wide ? 1 : 0)
@@ -644,11 +686,13 @@ private struct SettingRow<Control: View>: View {
 /// A boxed pop-up (native menu on open; boxed value + a single up/down chevron closed) — the settings
 /// picker. The box lives on the outer HStack (a menu label's own background is ignored under the
 /// borderless style), and the native menu indicator is hidden so only our chevron shows.
-private struct BoxedPicker: View {
+struct BoxedPicker: View {
     @Binding var selection: String
     let options: [SettingsChoice]
     var compact: Bool = false      // content-width; else fills the zone
     var width: CGFloat? = nil      // an explicit fixed width (e.g. equal-width day/week/month qualifiers)
+    /// One action under a separator at the end of the menu ("Download more models…").
+    var trailing: (title: String, danger: Bool, action: () -> Void)? = nil
     @Environment(\.colorScheme) private var scheme
     @State private var anchor: NSView?
     private var dark: Bool { scheme == .dark }
@@ -659,7 +703,7 @@ private struct BoxedPicker: View {
     var body: some View {
         // Our boxed look (value LEFT, chevron RIGHT); tapping opens OUR gold menu in its own panel.
         Button {
-            if let anchor { HubMenuPanel.shared.show(anchor: anchor, options: options, selected: selection, dark: dark) { selection = $0 } }
+            if let anchor { HubMenuPanel.shared.show(anchor: anchor, options: options, selected: selection, dark: dark, trailing: trailing) { selection = $0 } }
         } label: {
             HStack(spacing: 7) {
                 Text(currentLabel).font(RhemionStyle.font(12, .medium))
@@ -763,6 +807,8 @@ private struct StepperBox: View {
 /// A stack of chord recorder fields for one action.
 private struct HotkeyBindingStack: View {
     @Binding var specs: [String]
+    /// The action that already uses a chord, if any: other actions, or another row of this stack.
+    var owner: (_ spec: String, _ row: Int) -> String? = { _, _ in nil }
     let onBeginRecording: () -> Void
     let onEndRecording: () -> Void
     @Environment(\.colorScheme) private var scheme
@@ -774,9 +820,9 @@ private struct HotkeyBindingStack: View {
             ForEach(specs.indices, id: \.self) { index in
                 HStack(spacing: hubStackGap) {
                     HotkeyField(spec: binding(index), canRemove: specs.count > 1,
-                                clearOrRemove: { clearOrRemove(index) },
+                                clearOrRemove: { clearOrRemove(index) }, owner: { owner($0, index) },
                                 onBeginRecording: onBeginRecording, onEndRecording: onEndRecording)
-                        .frame(width: hubStackField)
+                        .frame(width: hubKeyField)
                     if index == specs.count - 1 {
                         HubSquareAdd(dark: dark, active: specs.count < maxBindings) { specs.append("off") }
                     }
@@ -800,12 +846,16 @@ private struct HotkeyField: View {
     @Binding var spec: String
     let canRemove: Bool
     let clearOrRemove: () -> Void
+    /// Who already uses a chord; a taken chord is refused and the field keeps listening.
+    let owner: (String) -> String?
     let onBeginRecording: () -> Void
     let onEndRecording: () -> Void
     @Environment(\.colorScheme) private var scheme
     @State private var recording = false
     @State private var monitor: Any?
     @State private var preview: [String] = []
+    /// "⌥⌘R is already used by Recall." under the field until another chord, Esc or a click ends it.
+    @State private var conflict: String?
     private var dark: Bool { scheme == .dark }
     private var caps: [String] { HotkeySpec.caps(spec) }
     private var hasValue: Bool { !HotkeySpec.isDisabled(spec) }
@@ -813,6 +863,17 @@ private struct HotkeyField: View {
     private var showClear: Bool { canRemove || hasValue }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            field
+            if let conflict {
+                Text(conflict).font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onDisappear { stop() }
+    }
+
+    private var field: some View {
         HStack(spacing: 6) {
             capsArea
             if showClear {
@@ -829,7 +890,6 @@ private struct HotkeyField: View {
             RoundedRectangle(cornerRadius: 7)
                 .strokeBorder(recording ? RhemionStyle.gold : RhemionStyle.line(dark), lineWidth: recording ? 2 : 1)
         }
-        .onDisappear { stop() }
     }
 
     private var capsArea: some View {
@@ -865,7 +925,11 @@ private struct HotkeyField: View {
             if event.type == .flagsChanged { preview = HotkeySpec.modifierCaps(event.modifierFlags); return nil }
             if event.keyCode == 53 { stop(); return nil }   // Esc cancels
             if let captured = HotkeySpec.spec(modifierFlags: event.modifierFlags, keyCode: event.keyCode) {
-                spec = captured; stop()
+                if let taken = owner(captured) {
+                    conflict = "\(HotkeySpec.display(captured)) is already used by \(taken)."; preview = []
+                } else {
+                    spec = captured; stop()
+                }
             }
             return nil   // swallow the key so it never types into a field
         }
@@ -873,7 +937,7 @@ private struct HotkeyField: View {
 
     private func stop() {
         let wasRecording = recording
-        recording = false; preview = []
+        recording = false; preview = []; conflict = nil
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         if wasRecording { onEndRecording() }   // restore the global hotkey (new or unchanged chord)
     }
@@ -886,15 +950,16 @@ private struct PTTBindingStack: View {
     let label: (String) -> String
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
-    private var maxBindings: Int { AppSettings.pttKeyOptions.count }
+    private var maxBindings: Int { Set(AppSettings.pttKeyOffered + keys).count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: hubStackGap) {
             ForEach(keys.indices, id: \.self) { index in
                 HStack(spacing: hubStackGap) {
                     PTTPickerBox(selection: binding(index), canRemove: keys.count > 1,
-                                 remove: { keys.remove(at: index) }, label: label, dark: dark)
-                        .frame(width: hubStackField)
+                                 remove: { keys.remove(at: index) }, label: label,
+                                 taken: Set(keys.enumerated().filter { $0.offset != index }.map(\.element)), dark: dark)
+                        .frame(width: hubKeyField)
                     if index == keys.count - 1 {
                         HubSquareAdd(dark: dark, active: keys.count < maxBindings) { keys.append(nextUnused()) }
                     }
@@ -903,7 +968,7 @@ private struct PTTBindingStack: View {
         }
     }
 
-    private func nextUnused() -> String { AppSettings.pttKeyOptions.first { !keys.contains($0) } ?? "right_cmd" }
+    private func nextUnused() -> String { AppSettings.pttKeyOffered.first { !keys.contains($0) } ?? "right_cmd" }
     private func binding(_ i: Int) -> Binding<String> {
         Binding(get: { keys.indices.contains(i) ? keys[i] : "right_option" },
                 set: { if keys.indices.contains(i) { keys[i] = $0 } })
@@ -916,14 +981,26 @@ private struct PTTPickerBox: View {
     let canRemove: Bool
     let remove: () -> Void
     let label: (String) -> String
+    /// Keys the other rows of the stack already use: shown "In use", not pickable (one key, one row).
+    var taken: Set<String> = []
     let dark: Bool
     @State private var anchor: NSView?
-    private var options: [SettingsChoice] { AppSettings.pttKeyOptions.map { SettingsChoice(id: $0, label: label($0)) } }
+    private var options: [SettingsChoice] {
+        // The offered keys, plus this row's own key if it is one chosen before the list was narrowed (it stays).
+        let keys = AppSettings.pttKeyOffered + (AppSettings.pttKeyOffered.contains(selection) ? [] : [selection])
+        let globe = GlobeKey.conflict == nil ? nil : "Set Globe to Do Nothing"
+        return keys.map { SettingsChoice(id: $0, label: label($0), takenNote: taken.contains($0) ? "In use" : nil,
+                                         hint: $0 == "fn" ? globe : nil) }
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             Button {
-                if let anchor { HubMenuPanel.shared.show(anchor: anchor, options: options, selected: selection, dark: dark) { selection = $0 } }
+                if let anchor {
+                    // Removing a key lives in its menu (a × beside the chevron was one slip from it).
+                    HubMenuPanel.shared.show(anchor: anchor, options: options, selected: selection, dark: dark,
+                                             trailing: canRemove ? ("Remove", true, remove) : nil) { selection = $0 }
+                }
             } label: {
                 HStack(spacing: 7) {
                     Text(label(selection)).font(RhemionStyle.font(12, .medium))
@@ -937,13 +1014,6 @@ private struct PTTPickerBox: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
             .background(FieldAnchor { anchor = $0 })
-            if canRemove {
-                Button(action: remove) {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(RhemionStyle.tertiary(dark)).frame(width: 16, height: 16).contentShape(Circle())
-                }
-                .buttonStyle(.plain).help("Remove")
-            }
         }
         .padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: hubFieldHeight)
         .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 7))
@@ -1180,7 +1250,7 @@ private struct PathBindingStack: View {
 // MARK: - Custom dropdown menu (Journal-style card, shown in its own panel so it can overflow the window)
 
 /// Captures the field's backing NSView, so a picker can position its menu panel at the field's screen rect.
-private struct FieldAnchor: NSViewRepresentable {
+struct FieldAnchor: NSViewRepresentable {
     let onView: (NSView) -> Void
     func makeNSView(context: Context) -> NSView { let v = NSView(); DispatchQueue.main.async { onView(v) }; return v }
     func updateNSView(_ nsView: NSView, context: Context) {}
@@ -1197,15 +1267,18 @@ final class HubMenuPanel {
     private var globalMonitor: Any?
     private static let gap: CGFloat = 4
 
-    fileprivate func show(anchor: NSView, options: [SettingsChoice], selected: String, dark: Bool, pick: @escaping (String) -> Void) {
+    /// `trailing`: one action under a separator at the end of the menu (Remove on a dictation key).
+    fileprivate func show(anchor: NSView, options: [SettingsChoice], selected: String, dark: Bool,
+                          trailing: (title: String, danger: Bool, action: () -> Void)? = nil, pick: @escaping (String) -> Void) {
         dismiss()
         guard let window = anchor.window else { return }
         let field = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
 
-        let card = HubMenuCard(options: options, selected: selected, minWidth: field.width, maxWidth: 620, dark: dark) { [weak self] picked in
+        let card = HubMenuCard(options: options, selected: selected, minWidth: field.width, maxWidth: 620, dark: dark,
+                               trailing: trailing.map { item in (item.title, item.danger, { [weak self] in self?.dismiss(); item.action() }) }) { [weak self] picked in
             pick(picked); self?.dismiss()
         }
-        let hosting = NSHostingView(rootView: card)
+        let hosting = NSHostingView(rootView: card.themedRoot().environment(\.colorScheme, dark ? .dark : .light))
         hosting.layout()
         let size = hosting.fittingSize
 
@@ -1231,12 +1304,71 @@ final class HubMenuPanel {
         }
     }
 
+    enum CardAlign { case leading, center, trailing }
+
+    /// Any card (a popover, a custom menu) in the same kind of panel, under its anchor — or above it when there
+    /// is no room below. `width` nil = the card's own width. `key: true` lets the card take typing (a search
+    /// field); Esc then closes it.
+    func showCard<Content: View>(anchor: NSView, dark: Bool, width: CGFloat? = nil, align: CardAlign = .leading,
+                                 key: Bool = false, @ViewBuilder content: () -> Content) {
+        dismiss()
+        guard let window = anchor.window else { return }
+        let field = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+        let card = content().frame(width: width).fixedSize(horizontal: width == nil, vertical: true)
+            .themedRoot()
+            .environment(\.colorScheme, dark ? .dark : .light)
+        let hosting = NSHostingView(rootView: card)
+        hosting.layout()
+        let size = hosting.fittingSize
+        let panel = key ? HubKeyPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
+                                      backing: .buffered, defer: false)
+                        : NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
+                                  backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.contentView = hosting
+        let x: CGFloat
+        switch align {
+        case .leading: x = field.minX
+        case .center: x = (field.midX - size.width / 2).rounded()
+        case .trailing: x = field.maxX - size.width
+        }
+        let screen = window.screen?.visibleFrame ?? .infinite
+        var y = field.minY - Self.gap - size.height
+        if y < screen.minY { y = field.maxY + Self.gap }   // no room below: open upward
+        y = max(screen.minY + 4, min(y, screen.maxY - size.height - 4))   // never past the screen's edge
+        panel.setFrameOrigin(NSPoint(x: min(max(x, screen.minX + 4), screen.maxX - size.width - 4), y: y))
+        if key { panel.makeKeyAndOrderFront(nil) } else { panel.orderFront(nil) }
+        panel.invalidateShadow()
+        self.panel = panel
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            if event.type == .keyDown {
+                if event.keyCode == 53, self?.panel != nil { self?.dismiss(); return nil }   // Esc
+                return event
+            }
+            if event.window !== self?.panel { self?.dismiss() }
+            return event
+        }
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.dismiss()
+        }
+    }
+
+    var isShowing: Bool { panel != nil }
+
     func dismiss() {
         if let localMonitor { NSEvent.removeMonitor(localMonitor); self.localMonitor = nil }
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor); self.globalMonitor = nil }
         panel?.orderOut(nil)
         panel = nil
     }
+}
+
+/// A card panel that can take the key focus (a search field inside it).
+private final class HubKeyPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 /// The dropdown card, hosted in `HubMenuPanel`: the shared menu rows on the shared card; no SwiftUI shadow,
@@ -1247,12 +1379,18 @@ private struct HubMenuCard: View {
     let minWidth: CGFloat
     let maxWidth: CGFloat
     let dark: Bool
+    var trailing: (title: String, danger: Bool, action: () -> Void)? = nil
     let pick: (String) -> Void
 
     var body: some View {
         VStack(spacing: 2) {
             ForEach(options) { option in
-                MenuRow(title: option.label, checked: option.id == selected, dark: dark) { pick(option.id) }
+                MenuRow(title: option.label, checked: option.id == selected, dark: dark,
+                        note: option.takenNote ?? option.hint, enabled: option.takenNote == nil) { pick(option.id) }
+            }
+            if let trailing {
+                Rectangle().fill(RhemionStyle.line(dark)).frame(height: 1).padding(.vertical, 3).padding(.horizontal, 8)
+                MenuRow(title: trailing.title, checked: false, dark: dark, danger: trailing.danger, action: trailing.action)
             }
         }
         .frame(minWidth: min(max(180, minWidth), maxWidth) - 12, maxWidth: maxWidth - 12, alignment: .leading)

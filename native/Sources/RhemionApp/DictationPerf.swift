@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // DictationPerf — per-dictation latency by phase, measured where the user feels it (the app), on the
 // monotonic clock. One `perf:` line per dictation in app.log, numbers only (never the text):
 //

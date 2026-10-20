@@ -1,4 +1,7 @@
-// The operation pop-up (DESIGN.md "Operation pop-up"): the standard for a destructive
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// The operation pop-up: the standard for a destructive
 // confirmation with progress. A compact borderless panel, a child of its window, centred over it; the
 // window keeps its own screen and height while the pop-up walks confirm → progress → result. Clear Data
 // (`ClearDataPopupView`) and Uninstall (`FarewellPopupView`) both use these pieces: `OperationPopupHost`
@@ -48,7 +51,7 @@ final class OperationPopupHost {
 
     func show<Content: View>(_ content: Content, over window: NSWindow, onCancel: @escaping () -> Void) {
         guard panel == nil else { return }
-        let hosting = NSHostingController(rootView: content)
+        let hosting = NSHostingController(rootView: content.themedRoot())
         hosting.sizingOptions = [.preferredContentSize]
         let panel = OperationPanel(contentViewController: hosting)
         panel.onCancel = onCancel
@@ -109,7 +112,7 @@ struct OperationPopupCard<Content: View>: View {
             .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: WindowLayout.popupRadius))
             .overlay {
                 RoundedRectangle(cornerRadius: WindowLayout.popupRadius)
-                    .strokeBorder(dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12), lineWidth: 0.5)
+                    .strokeBorder(RhemionStyle.theme(dark).edge, lineWidth: 0.5)
             }
             .foregroundStyle(RhemionStyle.text(dark))
     }
@@ -210,7 +213,7 @@ struct OperationStatusMark: View {
             Circle().fill(RhemionStyle.secondary(dark)).frame(width: 6, height: 6)
         case .done:
             Circle().fill(RhemionStyle.gold).frame(width: 16, height: 16)
-                .overlay { Image(systemName: "checkmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(.white) }
+                .overlay { Image(systemName: "checkmark").font(.system(size: 8, weight: .heavy)).foregroundStyle(RhemionStyle.theme(dark).onAccent) }
         case .running:
             Circle().trim(from: 0, to: 0.75).stroke(RhemionStyle.gold, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                 .frame(width: 14.5, height: 14.5).frame(width: 16, height: 16)

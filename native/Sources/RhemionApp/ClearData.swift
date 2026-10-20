@@ -1,11 +1,14 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Clear Data — one window that
 // replaces "Remove Downloaded Models" and "Reset Rhemion" (Settings › Advanced › Storage › Clear Data…), laid
 // out on the standard of the Uninstall window (`WindowLayout`): a side column (the calm Welcome logo, the
 // title, the "what stays" line, how much is freed and how many items, a quiet hint at the bottom) and a main
 // column: preset selections and ONE list of categories grouped Free up space / Personal data / Settings,
 // each row a gold checkbox, name, tag, size and a hint; Cancel / Delete…. The window only ever shows this
-// selection, so its height never changes. Delete… opens the operation pop-up (DESIGN.md, "Operation
-// pop-up"): a small borderless panel centred over the window — the "receipt" of what goes (confirm, 0.5 s
+// selection, so its height never changes. Delete… opens the operation pop-up: a small borderless panel
+// centred over the window — the "receipt" of what goes (confirm, 0.5 s
 // guard), then each row's progress, then what was freed. `AppController.runClearData` does the work behind
 // the quiesce barrier; only "Reset all settings" restarts the app.
 
@@ -193,6 +196,7 @@ final class ClearDataModel: ObservableObject, Identifiable {
             if name.hasPrefix("parakeet-") { label = "Parakeet " + (name.split(separator: "-").last.map(String.init) ?? name) }
             else if name.hasSuffix(".mlmodelc") { label = nil }
             else if StorageLayout.isSilenceModel(name) { label = "Whisper silence model" }
+            else if name.lowercased().hasSuffix(".gguf") { label = (name as NSString).deletingPathExtension }
             else { label = "Whisper " + StorageLayout.whisperID(forFile: name).dropFirst("whisper-".count) }
             if let label, !out.contains(label) { out.append(label) }
         }
@@ -491,7 +495,7 @@ final class ClearDataWindowController: NSObject, NSWindowDelegate {
         let model = make()
         self.model = model
         let root = ClearDataView(model: model, onCancel: { [weak self] in self?.cancelChoice() })
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: root.themedRoot())
         hosting.sizingOptions = [.preferredContentSize]
         let window = self.window ?? NSWindow(contentViewController: hosting)
         window.contentViewController = hosting
@@ -551,8 +555,8 @@ final class ClearDataWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The window's content — the selection only. App controls only (DESIGN.md): presets and Cancel are Raised
-/// R1, Delete… is Raised R1 with danger ink, Deselect All is the text link, the rows are the gold
+/// The window's content — the selection only. App controls only: presets and Cancel are raised
+/// buttons, Delete… is raised with danger ink, Deselect All is the text link, the rows are the gold
 /// `JournalCheckbox`. Red marks only the destructive button and the ticked rows' tags. Margins and fonts:
 /// `WindowLayout`. While the pop-up is up it takes no input.
 struct ClearDataView: View {

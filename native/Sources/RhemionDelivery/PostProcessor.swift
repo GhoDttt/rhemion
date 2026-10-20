@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// Final result of the delivery post-processing pipeline.
@@ -43,7 +46,9 @@ public struct PostProcessor: Sendable {
             return ProcessedText(text: "", shouldDeliver: false)
         }
 
-        let replaced = dictionary.apply(sanitized.text)
+        // Parakeet writes `<unk>` where a quote, dash or Cyrillic yo belongs: restore it before the dictionary sees the text.
+        let base = UnknownTokenRepair.repair(sanitized.text)
+        let replaced = dictionary.apply(base)
         let filtered = dehallucinator.filter(replaced)
 
         // Re-sanitize as the true last step so terminal-safety holds end-to-end: a dictionary
@@ -64,8 +69,8 @@ public struct PostProcessor: Sendable {
         // that case, recompute the no-dictionary branch (dehallucinate + normalize) to
         // get the "as spoken" text for undo.
         var pre: String? = nil
-        if replaced != sanitized.text {
-            let preNorm = sanitizer.sanitize(dehallucinator.filter(sanitized.text)).text
+        if replaced != base {
+            let preNorm = sanitizer.sanitize(dehallucinator.filter(base)).text
             if !preNorm.isEmpty && preNorm != final {
                 pre = preNorm
             }

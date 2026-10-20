@@ -22,4 +22,4 @@ Build instructions: [BUILDING.md](BUILDING.md). Code, comments and user-facing t
 
 One maintainer reviews everything, so it may take a while. The roadmap is maintainer-driven; not every good idea will fit.
 
-By contributing, you agree that your work is licensed under the [MIT License](LICENSE) and to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+By contributing, you agree that your work is licensed under the [Mozilla Public License 2.0](LICENSE) and to follow the [Code of Conduct](CODE_OF_CONDUCT.md).

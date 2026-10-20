@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Darwin
 import Foundation
 
@@ -43,6 +46,13 @@ public struct StorageLayout: Sendable {
     }
 
     public var historyDir: URL { dataDir.appendingPathComponent("history") }
+    /// The Journal's own marks on entries, in the state folder (`JournalMarks`, `InsertedAgainStore`).
+    public static let journalMarkFiles = ["journal-marks.json", "journal-inserted-again.json"]
+    /// The Journal's parsed months, saved so it opens without parsing the logs again (a copy of the journal text).
+    public static let journalCacheFolder = "journal-cache"
+    /// Beside active/dictionary.json: the version each save replaced, and unreadable files moved aside.
+    public static let dictionaryPrevious = "dictionary.previous.json"
+    public static let dictionaryUnreadablePrefix = "dictionary.unreadable-"
     public var tmpRoot: URL { tmpBase.appendingPathComponent(bundleID) }
     public var registryURL: URL { stateDir.appendingPathComponent(ExportRegistry.fileName) }
 
@@ -95,8 +105,9 @@ public struct StorageLayout: Sendable {
     /// Every `.bin` model in a folder plus the Core ML encoder that belongs to it (removed with it).
     private func whisperFiles(in dir: URL, _ names: [String], _ item: (URL, [String]) -> StorageItem?) -> [StorageItem] {
         let bins = names.filter { $0.lowercased().hasSuffix(".bin") }
+        let ggufs = names.filter { $0.lowercased().hasSuffix(".gguf") }
         let encoders = Set(bins.compactMap(Self.whisperEncoderName(forModel:))).intersection(names).sorted()
-        return (bins + encoders).compactMap { item(dir, [$0]) }
+        return (bins + ggufs + encoders).compactMap { item(dir, [$0]) }
     }
 
     public func items(_ c: StorageCategory) -> [StorageItem] {
@@ -117,8 +128,14 @@ public struct StorageLayout: Sendable {
             }.map { [$0] }
             // The diagnostic logs and their rotated copies (`LogRotation`).
             let logs = LogRotation.files(in: stateDir).map { [$0] }
-            return ([["active", "settings.json"], ["active", "settings.json.lock"]] + logs
-                    + [["runtime.sock"], ["export-last-run"], ["history-retention-last-run"]] + strayTemps).compactMap { item(stateDir, $0) }
+            // What each local model file said about itself, cached per file (every version of the cache).
+            let profiles = names(stateDir).filter { $0.hasPrefix("model-profiles-") && $0.hasSuffix(".json") }.map { [$0] }
+            // The cache folder macOS keeps for the app beside the temporary one (Metal's compiled shaders).
+            let systemCache = tmpBase.lastPathComponent == "T"
+                ? item(tmpBase.deletingLastPathComponent().appendingPathComponent("C"), [bundleID]) : nil
+            return [systemCache].compactMap { $0 } + ([["active", "settings.json"], ["active", "settings.json.lock"]] + logs
+                    + [["runtime.sock"], ["export-last-run"], ["history-retention-last-run"]] + strayTemps + profiles)
+                .compactMap { item(stateDir, $0) }
                 + [item(lib.appendingPathComponent("Preferences"), ["\(bundleID).plist"]),
                    item(lib.appendingPathComponent("Caches"), [bundleID]),
                    // CoreML's compiled-model cache for the runtime helper (named after the executable).
@@ -129,16 +146,25 @@ public struct StorageLayout: Sendable {
         case .temporary:
             return [item(tmpBase, [bundleID])].compactMap { $0 }
         case .models:
+            // What an interrupted download leaves in the folder Rhemion downloads Whisper and Qwen3-ASR into
+            // (`FileDownload`: ".download-<id>" before the checksum, ".<file>.partial" just before the move).
+            let leftovers = names(whisperDir).filter { $0.hasPrefix(".download-") || ($0.hasPrefix(".") && $0.hasSuffix(".partial")) }
             return parakeetFolders.compactMap { item(fluidModelsRoot, [$0]) } + whisperFiles(in: whisperDir, names(whisperDir), item)
+                + leftovers.compactMap { item(whisperDir, [$0]) }
         case .externalModels:
             return scannedExtraModelDirs.flatMap { dir in whisperFiles(in: dir, names(dir), item) }
         case .transcripts:
             let log = stateDir.appendingPathComponent("log")
             return names(log).filter { $0.hasPrefix("dictate-") || $0.hasPrefix(".dictate-") }.compactMap { item(stateDir, ["log", $0]) }
+                // What the Journal marks on its entries (Erased, put back with Insert again): part of the journal.
+                + (Self.journalMarkFiles + [Self.journalCacheFolder]).compactMap { item(stateDir, [$0]) }
                 + [item(historyDir, ["README.md"])].compactMap { $0 }
                 + months.flatMap { m in names(historyDir.appendingPathComponent(m)).filter { $0 != "Audio" }.compactMap { item(historyDir, [m, $0]) } }
         case .dictionary:
-            return [item(stateDir, ["active", "dictionary.json"])].compactMap { $0 }
+            let aside = names(stateDir.appendingPathComponent("active")).filter {
+                $0 == Self.dictionaryPrevious || ($0.hasPrefix(Self.dictionaryUnreadablePrefix) && $0.hasSuffix(".json"))
+            }
+            return ([["active", "dictionary.json"]] + aside.map { ["active", $0] }).compactMap { item(stateDir, $0) }
         case .recordings:
             return months.compactMap { item(historyDir, [$0, "Audio"]) }
         case .legacyContent:
@@ -179,10 +205,10 @@ public struct StorageLayout: Sendable {
 
     // MARK: Clear Data groupings
 
-    /// "parakeet-v3" → "parakeet-tdt-0.6b-v3" (FluidAudio's cache folder for that version).
+    /// "parakeet-v3" → "parakeet-tdt-0.6b-v3", "parakeet-ultra" → "parakeet-ultra" (FluidAudio's cache folder for
+    /// that version, from `parakeetModels`); nil for an id the runtime doesn't know.
     public static func parakeetFolder(forModel id: String) -> String? {
-        guard id.hasPrefix("parakeet-"), id.count > "parakeet-".count else { return nil }
-        return "parakeet-tdt-0.6b-" + id.dropFirst("parakeet-".count)
+        parakeetModels.first { $0.id == id }?.folder
     }
 
     /// The runtime's whisper id for a weights file: "ggml-large-v3-turbo-q5_0.bin" → "whisper-large-v3-turbo-q5_0".
@@ -190,6 +216,15 @@ public struct StorageLayout: Sendable {
         var stem = (name as NSString).deletingPathExtension
         if stem.lowercased().hasPrefix("ggml-") { stem = String(stem.dropFirst(5)) }
         return "whisper-\(stem)"
+    }
+
+    /// The runtime's id for a file in the local models folder: a Whisper `.bin` ("whisper-large-v3-turbo-q5_0"),
+    /// or a transcribe.cpp `.gguf` by its name in lower case ("qwen3-asr-1.7b-q5_k_m"); nil for anything else.
+    public static func localModelID(forFile name: String) -> String? {
+        let lower = name.lowercased()
+        if lower.hasSuffix(".bin") { return isSilenceModel(name) ? nil : whisperID(forFile: name) }
+        if lower.hasSuffix(".gguf") { return String(lower.dropLast(5)) }
+        return nil
     }
 
     /// Whisper's silence (VAD) helper, e.g. ggml-silero-v5.1.2.bin — token rule of the runtime's registry.
@@ -225,23 +260,25 @@ public struct StorageLayout: Sendable {
     /// FluidAudio's `AsrModels.modelsExist(at:version:)` requires for each (int8 encoder = Encoder.mlmodelc).
     /// Pinned to FluidAudio by `RhemionASRTests/ParakeetPresenceParityTests` (this target can't link it).
     public static let parakeetModels: [(id: String, folder: String, required: [String])] = [
+        ("parakeet-ultra", "parakeet-ultra",
+         ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc", "parakeet_vocab.json"]),
         ("parakeet-v3", "parakeet-tdt-0.6b-v3",
          ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc", "parakeet_vocab.json"]),
         ("parakeet-v2", "parakeet-tdt-0.6b-v2",
          ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecision.mlmodelc", "parakeet_vocab.json"]),
     ]
-    static let defaultModelID = "parakeet-v3"
+    static let defaultModelID = "parakeet-ultra"   // = ModelCatalog.defaultID (RhemionStorage does not link RhemionCore; pinned by ModelCatalogTests)
 
-    /// The whisper models the runtime discovers (`ModelRegistry.discover`): the built-in folder, then the
-    /// extra folders, names sorted; a `.bin` that isn't a silence model and is a readable regular file
+    /// The local models the runtime discovers (`ModelRegistry.discover`): the built-in folder, then the extra
+    /// folders, names sorted; a Whisper `.bin` that isn't a silence model or a `.gguf`, as a readable regular file
     /// (symlinks followed); the first file per id wins.
-    func discoveredWhisper() -> [(id: String, file: URL)] {
+    public func discoveredLocalModels() -> [(id: String, file: URL)] {
         let fm = FileManager.default
         var seen = Set<String>(), out: [(id: String, file: URL)] = []
         for dir in [whisperDir] + extraModelDirs {
-            for name in ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
-            where name.lowercased().hasSuffix(".bin") && !Self.isSilenceModel(name) {
-                let id = Self.whisperID(forFile: name), file = dir.appendingPathComponent(name)
+            for name in ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).sorted() {
+                guard let id = Self.localModelID(forFile: name) else { continue }
+                let file = dir.appendingPathComponent(name)
                 var isDir: ObjCBool = false
                 guard !seen.contains(id), fm.fileExists(atPath: file.path, isDirectory: &isDir), !isDir.boolValue,
                       fm.isReadableFile(atPath: file.path) else { continue }
@@ -259,7 +296,7 @@ public struct StorageLayout: Sendable {
         let parakeet = Self.parakeetModels.filter { p in
             p.required.allSatisfy { fm.fileExists(atPath: fluidModelsRoot.appendingPathComponent(p.folder).appendingPathComponent($0).path) }
         }.map(\.id)
-        let present = parakeet + discoveredWhisper().map(\.id)
+        let present = parakeet + discoveredLocalModels().map(\.id)
         let desired = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         if present.contains(desired) { return desired }
         if present.contains(Self.defaultModelID) { return Self.defaultModelID }
@@ -282,18 +319,18 @@ public struct StorageLayout: Sendable {
         // The silence model goes with Whisper: in use when Whisper is effective, or selected and on disk.
         var whisperSelected = effective.hasPrefix("whisper-")
         var keep: [String] = []
-        let whisper = discoveredWhisper()
+        let local = discoveredLocalModels()
         for id in Set([effective, selected]) where !id.isEmpty {
             if let folder = Self.parakeetFolder(forModel: id) {
                 keep.append(Self.resolvedPath(fluidModelsRoot.appendingPathComponent(folder)))
             }
-            // Any .bin with this id in the search path (not only the discovered one): a setting's file
-            // that isn't usable right now is still the user's choice.
-            var files = whisper.filter { $0.id == id }.map(\.file)
-            if id.hasPrefix("whisper-") {
+            // Any local model file with this id in the search path (not only the discovered one): a setting's
+            // file that isn't usable right now is still the user's choice.
+            var files = local.filter { $0.id == id }.map(\.file)
+            if Self.parakeetFolder(forModel: id) == nil {
                 for dir in [whisperDir] + extraModelDirs {
                     for name in ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
-                    where name.lowercased().hasSuffix(".bin") && Self.whisperID(forFile: name) == id {
+                    where Self.localModelID(forFile: name) == id {
                         files.append(dir.appendingPathComponent(name))
                     }
                 }

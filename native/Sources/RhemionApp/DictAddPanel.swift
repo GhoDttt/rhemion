@@ -1,9 +1,12 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Dict-add panel — the quick-add surface for the dict-add hotkey. A small native window matching
 // the rest of the app (Settings / Dictionary): system colors, theme-adaptive, rounded-border
 // fields, a prominent Add button. Two fields, "As heard" (seeded from the selection) → "Correct". On
-// submit it writes the replacement via DictionaryStore.add, fixes the selected word in place when the
-// field allows it (otherwise copies the fix), shows a brief confirmation, then closes and hands focus back
-// to the app the word came from. Esc = cancel, Return = add.
+// submit it writes the replacement via DictionaryStore.add and fixes the selected word: in place when the
+// field allows it, otherwise by pasting over the selection once the panel has closed and the app has the
+// focus back (Electron fields such as Obsidian and VSCodium refuse the direct write). Esc = cancel, Return = add.
 
 import AppKit
 import SwiftUI
@@ -13,6 +16,8 @@ final class DictAddPanelController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var openToken = 0
     private var returnTo: NSRunningApplication?
+    /// A fix the field would not take directly: pasted over the selection after the panel closes.
+    private var pendingFix: (target: AXSelection.Target, text: String)?
 
     /// Open the panel seeded with `heard` (empty when nothing was selected). Only one at a time. Each
     /// open bumps a token; a view's deferred auto-close is tagged with its token, so reopening within
@@ -23,13 +28,15 @@ final class DictAddPanelController: NSObject, NSWindowDelegate {
         // Still the user's app: the panel has not activated Rhemion yet.
         let front = NSWorkspace.shared.frontmostApplication
         returnTo = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+        pendingFix = nil
         let view = DictAddPanelView(
             heard: heard,
             add: { spoken, correct in DictionaryStore.add(variant: spoken, canonical: correct) },
             fix: { spoken, correct in target.map { AXSelection.fix($0, spoken: spoken, correct: correct) } },
+            fixAfterClose: { [weak self] text in if let target { self?.pendingFix = (target, text) } },
             onClose: { [weak self] in self?.close(token: token) }
         )
-        let hosting = NSHostingController(rootView: view)
+        let hosting = NSHostingController(rootView: view.themedRoot())
         if let window {
             window.contentViewController = hosting
         } else {
@@ -48,10 +55,40 @@ final class DictAddPanelController: NSObject, NSWindowDelegate {
     private func close(token: Int) {
         guard token == openToken else { return }
         window?.orderOut(nil)
-        returnTo?.activate(); returnTo = nil
+        handBack()
     }
 
-    func windowWillClose(_ notification: Notification) { returnTo?.activate(); returnTo = nil }
+    func windowWillClose(_ notification: Notification) { handBack() }
+
+    private func handBack() {
+        returnTo?.activate(); returnTo = nil
+        if let fix = pendingFix { pendingFix = nil; Self.pasteFix(fix.text, over: fix.target) }
+    }
+
+    /// Paste the corrected selection over the original one in the app the word came from. Waits for that app
+    /// to have the focus back, then pastes only if the same field still holds the same selection; ⌘V replaces
+    /// it, the paste engine restores the clipboard. Anything else leaves the text alone: the dictionary entry
+    /// is saved either way and fixes the word from the next dictation.
+    private static func pasteFix(_ text: String, over target: AXSelection.Target, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(attempt == 0 ? 120 : 60)) {
+            let back = NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
+            guard back, AXSelection.stillSelected(target) else {
+                if attempt < 8 { pasteFix(text, over: target, attempt: attempt + 1) }   // about 0.6 s for the app to come back
+                else { log("dict-add: fix skipped (\(back ? "selection moved" : "app not back"))") }
+                return
+            }
+            let verifier = PasteVerifier.before()
+            ClipboardPaste.paste(text, targetPid: Int(target.pid), stillTarget: { AXSelection.stillSelected(target) }) { status in
+                guard case .pasteSubmitted = status else { log("dict-add: fix paste \(status)"); return }
+                let token = ClipboardPaste.lastPostedToken.value
+                DispatchQueue.global(qos: .utility).async {
+                    let outcome = verifier?.after(inserted: text.utf16.count) ?? .unreadable
+                    if case .landed = outcome, let token { ClipboardPaste.restoreNow(token: token) }
+                    log("dict-add: fixed by paste (\(outcome.label))")
+                }
+            }
+        }
+    }
 }
 
 private struct DictAddPanelView: View {
@@ -60,6 +97,7 @@ private struct DictAddPanelView: View {
     let heard: String
     let add: (String, String) -> DictionaryStore.AddOutcome
     let fix: (String, String) -> AXSelection.FixResult?
+    let fixAfterClose: (String) -> Void
     let onClose: () -> Void
 
     @State private var heardText: String
@@ -73,10 +111,12 @@ private struct DictAddPanelView: View {
     private let hadSelection: Bool
 
     init(heard: String, add: @escaping (String, String) -> DictionaryStore.AddOutcome,
-         fix: @escaping (String, String) -> AXSelection.FixResult?, onClose: @escaping () -> Void) {
+         fix: @escaping (String, String) -> AXSelection.FixResult?, fixAfterClose: @escaping (String) -> Void,
+         onClose: @escaping () -> Void) {
         self.heard = heard
         self.add = add
         self.fix = fix
+        self.fixAfterClose = fixAfterClose
         self.onClose = onClose
         let seeded = heard.trimmingCharacters(in: .whitespacesAndNewlines)
         self.hadSelection = !seeded.isEmpty
@@ -148,10 +188,11 @@ private struct DictAddPanelView: View {
         case .fixed?:
             log("dict-add: fixed in place"); finish("\(saved) and fixed in the text: \(spoken) → \(correct)")
         case .unavailable(let text)?:
-            log("dict-add: fix copied (field not editable)")
-            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
-            finish("\(saved): \(spoken) → \(correct). This field can't be edited directly, so the fix is copied. Press ⌘V.",
-                   hold: 3.0)
+            // The field refused the direct write (Electron, web): the fix is pasted over the selection as
+            // soon as the panel closes and the app has the focus back.
+            log("dict-add: fix by paste after close")
+            fixAfterClose(text)
+            finish("\(saved), fixing it in the text: \(spoken) → \(correct)", hold: 0.8)
         case .notFound?, nil:
             finish("\(saved): \(spoken) → \(correct)")
         }

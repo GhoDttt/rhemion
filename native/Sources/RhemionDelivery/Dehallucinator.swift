@@ -1,10 +1,13 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// Strips known whisper subtitle-credit hallucinations from recognized text.
 ///
 /// whisper.cpp, trained partly on YouTube subtitles, hallucinates subtitle-CREDIT
-/// lines on trailing or embedded silence (e.g. "Редактор субтитров А.Семкин Корректор
-/// А.Егорова", "Субтитры сделал DimaTorzok", "Subtitles by the Amara.org community").
+/// lines on trailing or embedded silence (e.g. Russian "subtitle editor <name>, proofreader <name>",
+/// "subtitles made by <handle>", "Subtitles by the Amara.org community").
 /// Silero VAD reduces but does not eliminate them. This is a deterministic,
 /// high-precision post-filter — precision over recall: it would rather leave a
 /// hallucination than eat a single word of real dictation.
@@ -26,16 +29,16 @@ public struct Dehallucinator: Sendable {
     private static let nbsp = "\u{00A0}"
 
     // --- Attribution target: what a credit is attributed TO. Required by every strong
-    // clause, so a bare role word ("корректор", "subtitles") is never enough to strip. ---
+    // clause, so a bare role word (Russian "proofreader", "subtitles") is never enough to strip. ---
     private static let namePattern: String =
-        "(?:(?:[А-ЯЁ]\\.[ " + nbsp + "]*){1,2}[А-ЯЁ][а-яё\\-]+"          // initialled Cyrillic: А.Семкин, А. В. Семкин
+        "(?:(?:[А-ЯЁ]\\.[ " + nbsp + "]*){1,2}[А-ЯЁ][а-яё\\-]+"          // initialled Cyrillic surname: one or two initials, then the name
         + "|@?[A-Za-zА-ЯЁ][\\w.\\-]{2,}"                                 // handle: DimaTorzok, @user
         + "|(?:[А-ЯЁA-Z][а-яёa-z\\-]+)(?:[ " + nbsp + "]+[А-ЯЁA-Z][а-яёa-z\\-]+){0,2})"  // 1-3 capitalized words
 
     private static let amaraPattern = "amara\\.org"
 
     // --- PRIMARY clauses: a full credit template. A credit run must START with one of
-    // these, so "Корректор <name>" (secondary) can never be stripped on its own. ---
+    // these, so Russian "proofreader <name>" (secondary) can never be stripped on its own. ---
     private static let primaryPattern: String = {
         let alternatives = [
             "редактор(?:ы)?\\s+субтитров\\s+" + namePattern,

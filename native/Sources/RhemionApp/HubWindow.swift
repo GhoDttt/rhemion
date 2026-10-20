@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import AppKit
 import SwiftUI
 import RhemionIPC
@@ -38,6 +41,8 @@ enum HubDestination: Int, CaseIterable, Identifiable {
 final class HubModel: ObservableObject {
     @Published var dest: HubDestination = .journal
     @Published var settingsCategory: SettingsCategory = .general
+    /// Set by General's "Change in Models ›": Models opens with the languages list open.
+    @Published var openLanguagesPicker = false
     @Published var models: [ModelOption] = []
     @Published var mics: [MicOption] = []
 
@@ -141,12 +146,18 @@ final class HubWindowController: NSObject, NSWindowDelegate {
         model.mics = mics
     }
 
+    /// Open Settings at a category (the `--settings <Category>` launch argument, for checking a page).
+    func showSettings(_ category: SettingsCategory) {
+        model.settingsCategory = category
+        show(dest: .settings)
+    }
+
     /// Show the hub, optionally jumping to a destination (e.g. Settings from the ⌘, menu item).
     func show(dest: HubDestination? = nil) {
         if let dest { model.dest = dest }
         if window == nil {
             let root = HubView(model: model, onTitle: { [weak self] title in self?.window?.title = title })
-            let hosting = NSHostingController(rootView: root)
+            let hosting = NSHostingController(rootView: root.themedRoot())
             hosting.sizingOptions = [.minSize]
             let window = NSWindow(contentViewController: hosting)
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -330,7 +341,7 @@ private struct RailButton: View {
         .padding(.horizontal, 10).padding(.vertical, 5)
         .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 7))
         .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
-        .shadow(color: .black.opacity(dark ? 0.35 : 0.12), radius: 6, y: 2)
+        .themeShadow(RhemionStyle.theme(dark).tooltipShadow)
         .fixedSize()
     }
 }

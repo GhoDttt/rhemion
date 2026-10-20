@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import RhemionASR
 import RhemionCore
 
@@ -18,11 +21,24 @@ public func makeModelRegistry(from snapshot: SettingsSnapshot) -> TranscriptionE
 public func makeModelRegistry(entries: [ModelEntry], snapshot: SettingsSnapshot) -> TranscriptionEngineRegistry {
     let registry = TranscriptionEngineRegistry()
     let whisperBinary = snapshot.whisperBinary ?? WhisperEngine.defaultBinary
+    // The helper inside Rhemion.app (transcribe.cpp) keeps the model loaded and runs Whisper and Qwen. Only a
+    // build without the helper runs Whisper through whisper-cli per take (`whisper_binary`, else Homebrew's).
+    let helper = TranscribeHelperEngine.bundledHelper()
     for entry in entries where entry.found {
         let engine: TranscriptionEngine
         switch entry.engine {
+        case "apple":
+            engine = AppleSpeechEngine()
         case "whisper":
-            engine = WhisperEngine(binary: whisperBinary, model: entry.whisperModel ?? WhisperEngine.defaultModel)
+            let model = entry.whisperModel ?? WhisperEngine.defaultModel
+            if let helper {
+                engine = TranscribeHelperEngine(id: "whisper", helper: helper, model: model)
+            } else {
+                engine = WhisperEngine(binary: whisperBinary, model: model)
+            }
+        case "qwen", "transcribe":
+            guard let helper, let model = entry.whisperModel else { continue }
+            engine = TranscribeHelperEngine(id: entry.engine, helper: helper, model: model)
         default: // parakeet
             engine = ParakeetEngine(version: entry.parakeetVersion ?? .v3)
         }

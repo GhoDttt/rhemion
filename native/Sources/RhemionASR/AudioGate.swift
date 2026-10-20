@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// Decides whether a captured take is worth transcribing at all. An accidental hotkey tap (press +
@@ -8,7 +11,7 @@ import Foundation
 /// requirement of several VOICED frames. This rejects isolated transients (a single loud sample or
 /// one click is only one frame) while still passing quiet but SUSTAINED speech — better than a raw
 /// peak threshold, which a single click passes. The duration floor stays low enough for short words
-/// ("да", "нет", "стоп").
+/// (one-syllable Russian words such as "yes", "no", "stop").
 ///
 /// Thresholds are conservative defaults; the honest way to tune them is to log per-take duration and
 /// frame RMS over a few hundred real accepted/canceled takes and fit to the observed room-tone vs

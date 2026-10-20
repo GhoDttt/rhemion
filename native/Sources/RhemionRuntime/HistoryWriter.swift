@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 import Darwin
 import RhemionCore
@@ -226,12 +229,19 @@ private actor HistoryRenderer {
             catch { HistoryStore.log("export adoption failed: \(error)") }
         }
         var results: [HistoryReconcileResult] = []
-        for month in HistoryStore.availableMonths(stateDirectory: stateDirectory, historyDirectory: historyDirectory) {
+        // An entry id carries the time it was made: look in those months first, and in the rest only for ids
+        // not found there (reading every month made one deletion take seconds on a long journal).
+        let months = HistoryStore.availableMonths(stateDirectory: stateDirectory, historyDirectory: historyDirectory)
+        let likely = Set(ids.flatMap { HistoryStore.likelyMonths(forID: $0, calendar: calendar) })
+        var remaining = ids
+        for month in months.filter(likely.contains) + months.filter({ !likely.contains($0) }) {
+            guard !remaining.isEmpty else { break }
             do {
                 let records = try HistoryStore.readRecords(month: month, stateDirectory: stateDirectory)
-                let dropped = try HistoryStore.removeRecords(ids: ids, allRecords: records, month: month,
+                let dropped = try HistoryStore.removeRecords(ids: remaining, allRecords: records, month: month,
                                                              stateDirectory: stateDirectory, historyDirectory: historyDirectory)
                 guard !dropped.isEmpty else { continue }
+                remaining.subtract(dropped)
                 // Report the deletion BEFORE the (secondary) re-render so an export/render failure never
                 // hides that the records + audio are already gone — a stale .md is fixed by reconcile.
                 results.append(HistoryReconcileResult(month: month, removedIDs: dropped))
@@ -303,7 +313,12 @@ private actor HistoryRenderer {
         let months = HistoryStore.availableMonths(stateDirectory: stateDirectory, historyDirectory: historyDirectory)
         var known = Set<String>()
         for month in months {
-            for record in (try? HistoryStore.readRecords(month: month, stateDirectory: stateDirectory)) ?? [] {
+            // A month that can't be read could own any of these files: sweep nothing this time.
+            guard let log = try? HistoryStore.readMonth(month, stateDirectory: stateDirectory) else {
+                HistoryStore.log("orphan sweep skipped: the \(month) journal log could not be read"); return 0
+            }
+            known.formUnion(log.strayIDs)
+            for record in log.records {
                 known.insert(record.id.uppercased())
                 if let audio = record.audio, let owner = HistoryStore.idInAudioName(URL(fileURLWithPath: audio).lastPathComponent) {
                     known.insert(owner)
@@ -475,11 +490,14 @@ public actor HistoryStore: HistorySink {
     }
 
     /// Every journaled entry id (upper case), across all months: what the spool recovery must not touch.
-    public func knownIDs() -> Set<String> {
+    /// Nil when a month's log can't be read: any recording might then be journaled already.
+    public func knownIDs() -> Set<String>? {
         let stateDirectory = resolveStateDirectory(), historyDirectory = resolveHistoryDirectory()
         var ids = Set<String>()
         for month in Self.availableMonths(stateDirectory: stateDirectory, historyDirectory: historyDirectory) {
-            for record in (try? Self.readRecords(month: month, stateDirectory: stateDirectory)) ?? [] { ids.insert(record.id.uppercased()) }
+            guard let log = try? Self.readMonth(month, stateDirectory: stateDirectory) else { return nil }
+            ids.formUnion(log.strayIDs)
+            for record in log.records { ids.insert(record.id.uppercased()) }
         }
         return ids
     }
@@ -544,7 +562,7 @@ public actor HistoryStore: HistorySink {
         let audioNames = fm.fileExists(atPath: audioDirectory.path)
             ? try fm.contentsOfDirectory(atPath: audioDirectory.path) : []
         let audioIDs = Set(audioNames.compactMap(idInAudioName))
-        let records = try readRecords(month: month, stateDirectory: stateDirectory)
+        let (records, strayIDs) = try readMonth(month, stateDirectory: stateDirectory)
         var removed: [HistoryRecord] = [], survivors: [HistoryRecord] = []
         for record in records {
             let missingFromNote = noteExists && !containsEntryID(noteIDs, id: record.id)
@@ -561,7 +579,7 @@ public actor HistoryStore: HistorySink {
         // before its record is appended. An age guard additionally spares any very recent (in-flight)
         // wav regardless of caller.
         if collectOrphanAudio {
-            let keepIDs = Set(survivors.map { $0.id.uppercased() })
+            let keepIDs = Set(survivors.map { $0.id.uppercased() }).union(strayIDs)
             for name in audioNames {
                 guard let id = idInAudioName(name), !keepIDs.contains(id) else { continue }
                 let url = audioDirectory.appendingPathComponent(name)
@@ -698,8 +716,15 @@ public actor HistoryStore: HistorySink {
             FileManager.default.createFile(atPath: url.path, contents: nil,
                                            attributes: [.posixPermissions: 0o600])
         }
-        let handle = try FileHandle(forWritingTo: url); defer { try? handle.close() }
-        try handle.seekToEnd(); try handle.write(contentsOf: data); try handle.synchronize()
+        let handle = try FileHandle(forUpdating: url); defer { try? handle.close() }
+        // A line cut short (a crash mid-write) must not swallow this one: start it on a fresh line.
+        let end = try handle.seekToEnd()
+        if end > 0 {
+            try handle.seek(toOffset: end - 1)
+            if try handle.read(upToCount: 1) != Data([0x0a]) { data.insert(0x0a, at: 0) }
+            try handle.seekToEnd()
+        }
+        try handle.write(contentsOf: data); try handle.synchronize()
     }
 
     private static func record(_ e: HistoryEntry) -> HistoryRecord {
@@ -712,9 +737,46 @@ public actor HistoryStore: HistorySink {
     }
 
     static func readRecords(month: String, stateDirectory: URL) throws -> [HistoryRecord] {
+        try readMonth(month, stateDirectory: stateDirectory).records
+    }
+
+    /// One month's log. A MISSING log is an empty month; a log that exists but can't be read THROWS, so no
+    /// caller takes it for empty (reconcile and the orphan sweep would then delete recordings whose rows are
+    /// still there). Lines are split as bytes: invalid UTF-8 or a broken line loses only that line, and the
+    /// entry ids such a line still carries come back in `strayIDs`, so its recording is never an orphan.
+    static func readMonth(_ month: String, stateDirectory: URL) throws -> (records: [HistoryRecord], strayIDs: Set<String>) {
         let url = stateDirectory.appendingPathComponent("log/dictate-\(month).jsonl")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").compactMap { try? JSONDecoder().decode(HistoryRecord.self, from: Data($0.utf8)) }
+        guard FileManager.default.fileExists(atPath: url.path) else { return ([], []) }
+        let data = try Data(contentsOf: url), decoder = JSONDecoder()
+        var records: [HistoryRecord] = [], stray = Set<String>()
+        for line in data.split(separator: 0x0a, omittingEmptySubsequences: true) {
+            if let record = try? decoder.decode(HistoryRecord.self, from: Data(line)) { records.append(record); continue }
+            stray.formUnion(idsInRawLine(Data(line)))
+        }
+        return (records, stray)
+    }
+
+    /// The months an entry made at the time its id carries (the first 10 characters of a ULID) can be logged
+    /// in: that day's month and the next or previous day's, for a take that crossed midnight or a time zone
+    /// change. Empty for an id that isn't a ULID.
+    static func likelyMonths(forID id: String, calendar: Calendar = .current) -> Set<String> {
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        var ms: UInt64 = 0
+        for c in id.uppercased().prefix(10) {
+            guard id.count == 26, let v = alphabet.firstIndex(of: c) else { return [] }
+            ms = ms << 5 | UInt64(v)
+        }
+        let date = Date(timeIntervalSince1970: Double(ms) / 1000)
+        return Set([-86_400.0, 0, 86_400].map { month(date.addingTimeInterval($0), calendar: calendar) })
+    }
+
+    /// Every entry-id-shaped token (26 Crockford base32 characters) in a line that didn't decode.
+    static func idsInRawLine(_ line: Data) -> Set<String> {
+        let text = String(decoding: line, as: UTF8.self)
+        guard let regex = try? NSRegularExpression(pattern: #"(?<![0-9A-Za-z])[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}(?![0-9A-Za-z])"#)
+        else { return [] }
+        let ns = text as NSString
+        return Set(regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range).uppercased() })
     }
 
     /// Whether the month's log holds any non-empty line — a decode-free emptiness check so a month

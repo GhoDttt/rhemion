@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Developer-only insertion bench (deploy/insertion-bench). Off unless `<stateDir>/bench/enabled` exists at
 // launch; nothing in the product reaches it. The bench driver writes `bench/request.json`, posts the Darwin
 // notification below, and waits for `bench/result-<id>.json`. The insertion runs through the real code

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // NotchIndicator — the renderer (IndicatorView) draws
 // the plate + breathing orb + halo + the waiting motion and the outcome, with fixed geometry/colors/animation
 // constants. The orb is the user's voice inside the Mac, so its waves only ever go OUT (the logo's law: the
@@ -15,7 +18,7 @@ import QuartzCore
 
 // Geometry constants.
 private enum GK {
-    static let ext: CGFloat = 48, rb: CGFloat = 12, ri: CGFloat = 4, slideT: Double = 0.18, spinR: CGFloat = 9
+    static let ext: CGFloat = 48, rb: CGFloat = 12, ri: CGFloat = 4, slideT: Double = 0.18
     // Silence countdown ring: faint full track + bright depleting arc, on the orb.
     static let ringR: CGFloat = 7.5, ringW: CGFloat = 1.6, cdTrackW: CGFloat = 1.4, cdTrackA: CGFloat = 0.16
 }
@@ -25,11 +28,10 @@ private let ACCENT_HI: (CGFloat, CGFloat, CGFloat) = (0.953, 0.784, 0.408)
 private let ACCENT_LO: (CGFloat, CGFloat, CGFloat) = (0.878, 0.643, 0.180)
 // Pale cream sheen for the orb's matte highlight (same diffuse-light idea as the app icon).
 private let SHEEN: (CGFloat, CGFloat, CGFloat) = (1.0, 0.94, 0.78)
-// DESIGN.md's one danger red (system red, dark variant: the plate is black).
+// The app's one danger red (system red, dark variant: the plate is black).
 private let REDC: (CGFloat, CGFloat, CGFloat) = (1.0, 0.271, 0.227)
 private let M_BASE: CGFloat = 2.5, M_GROW: CGFloat = 6.0
-private let RENDER_INTERVAL = 0.06, ANIM_INTERVAL = 0.02, SPIN_INTERVAL = 0.03
-private let DOTS_N = 9, DOT_FADE: CGFloat = 270
+private let RENDER_INTERVAL = 0.06, ANIM_INTERVAL = 0.02
 
 private func cg(_ c: (CGFloat, CGFloat, CGFloat), _ a: CGFloat = 1) -> CGColor {
     CGColor(red: c.0, green: c.1, blue: c.2, alpha: a)
@@ -124,7 +126,7 @@ final class NotchIndicator {
     func downloadHint() {
         show(); view?.downloadHint()
     }
-    /// Speech model on disk but still being prepared (first load/compile): the spinner dots, held until the
+    /// Speech model on disk but still being prepared (first load/compile): the waiting breath, held until the
     /// model is ready (endModelCue) instead of a download ring frozen at 100%.
     func preparing() { show(); view?.preparing() }
     /// End a download/not-ready cue if that's what's showing (e.g. the model just became ready), WITHOUT
@@ -260,12 +262,10 @@ private final class IndicatorView: NSView {
     private var plateW: CGFloat
     private var phase: Phase = .hidden
     private var meterLevel: CGFloat = 0, meterTarget: CGFloat = 0, meterPhase: CGFloat = 0, meterPulse: CGFloat = 0
-    private var spinBase: CGFloat = 0
-    private var dotsAlpha: CGFloat = 0, dotsScale: CGFloat = 1
     private var glyph: (kind: String, progress: CGFloat, alpha: CGFloat)? = nil
     private var ringFrac: CGFloat = 0
 
-    private var meterTimer: Timer?, animTimer: Timer?, spinTimer: Timer?, graceTimer: Timer?, procTimer: Timer?
+    private var meterTimer: Timer?, animTimer: Timer?, graceTimer: Timer?, procTimer: Timer?
     private var echoTimer: Timer?   // the pinned rest's echo bursts (separate from slide()'s animTimer)
     enum Outcome { case inserted, kept, failed, journaled, empty }
     private var waitStart: CFTimeInterval = 0
@@ -394,7 +394,7 @@ private final class IndicatorView: NSView {
         let wasOut = phase != .hidden && plateW >= expandedW - 0.5   // pinned rest, an outcome still showing
         stopAll()
         phase = .recording
-        glyph = nil; dotsAlpha = 0
+        glyph = nil
         // Already out (a pinned window keeps the plate out): stay put, only the orb changes. Never slide in and out.
         if !wasOut { plateW = retractedW; if style == .notch { slide(to: expandedW) } } else { plateW = expandedW }
         startMeter()
@@ -426,7 +426,7 @@ private final class IndicatorView: NSView {
         if phase != .download {
             stopAll()
             phase = .download
-            glyph = nil; dotsAlpha = 0
+            glyph = nil
             if style == .notch { plateW = retractedW; slide(to: expandedW) } else { plateW = retractedW }
         }
         ringFrac = max(0, min(1, fraction))
@@ -446,29 +446,29 @@ private final class IndicatorView: NSView {
         }
     }
 
-    /// Hide ONLY if a download/not-ready cue is on screen — never interrupt a live recording/spinner/countdown.
+    /// Hide ONLY if a download/not-ready cue is on screen — never interrupt a live recording/waiting breath/countdown.
     func endModelCue() { if phase == .download || phase == .hint || phase == .preparing { hide() } }
 
-    /// Model preparing: the processing spinner, persistent (no safety timeout) until endModelCue().
+    /// Model preparing: the same waiting breath as recognition, persistent (no safety timeout) until endModelCue().
     func preparing() {
         guard phase != .preparing else { return }
         stopAll()
         phase = .preparing
         glyph = nil
-        guard style == .notch else { plateW = retractedW; startSpinner(); return }
-        // slide() and the spinner share one animation timer: start the spinner once the plate is out.
+        guard style == .notch else { plateW = retractedW; startWaitingBreath(); return }
+        // slide() and the breath share one animation timer: start the breath once the plate is out.
         plateW = retractedW
         slide(to: expandedW)
         graceTimer = Timer.scheduledTimer(withTimeInterval: GK.slideT, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { guard let self, self.phase == .preparing else { return }; self.startSpinner() }
+            MainActor.assumeIsolated { guard let self, self.phase == .preparing else { return }; self.startWaitingBreath() }
         }
     }
 
     func hold() {
-        guard phase == .recording || phase == .countdown else { return }   // stop during countdown → spinner
+        guard phase == .recording || phase == .countdown else { return }   // stop during countdown → the waiting breath
         phase = .holding
         stopMeter()
-        // Bloom into the spinner only if recognition outlasts the grace (fast/empty takes resolve first).
+        // Bloom into the waiting breath only if recognition outlasts the grace (fast/empty takes resolve first).
         graceTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.phase == .holding else { return }
@@ -504,8 +504,8 @@ private final class IndicatorView: NSView {
     }
 
     func stopAll() {
-        [meterTimer, animTimer, spinTimer, graceTimer, procTimer, echoTimer].forEach { $0?.invalidate() }
-        meterTimer = nil; animTimer = nil; spinTimer = nil; graceTimer = nil; procTimer = nil; echoTimer = nil
+        [meterTimer, animTimer, graceTimer, procTimer, echoTimer].forEach { $0?.invalidate() }
+        meterTimer = nil; animTimer = nil; graceTimer = nil; procTimer = nil; echoTimer = nil
     }
     private func stopMeter() { meterTimer?.invalidate(); meterTimer = nil }
     private func stopGrace() { graceTimer?.invalidate(); graceTimer = nil }
@@ -540,29 +540,12 @@ private final class IndicatorView: NSView {
         }
     }
 
-    private func startSpinner() {
-        animTimer?.invalidate(); spinTimer?.invalidate()
-        dotsAlpha = 0; dotsScale = 0
-        let start = CACurrentMediaTime(), spawn = 0.24
-        animTimer = Timer.scheduledTimer(withTimeInterval: ANIM_INTERVAL, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let p = min(1, (CACurrentMediaTime() - start) / spawn), e = 1 - (1 - p) * (1 - p)
-                self.spinBase = (self.spinBase + 11).truncatingRemainder(dividingBy: 360)
-                self.dotsAlpha = CGFloat(e); self.dotsScale = CGFloat(e)
-                self.needsDisplay = true
-                if p >= 1 {
-                    self.animTimer?.invalidate(); self.animTimer = nil
-                    self.spinTimer = Timer.scheduledTimer(withTimeInterval: SPIN_INTERVAL, repeats: true) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            guard let self else { return }
-                            self.spinBase = (self.spinBase + 11).truncatingRemainder(dividingBy: 360)
-                            self.dotsAlpha = 1; self.dotsScale = 1
-                            self.needsDisplay = true
-                        }
-                    }
-                }
-            }
+    /// The breath alone, without the recognition watchdog: the model cue holds until endModelCue().
+    private func startWaitingBreath() {
+        animTimer?.invalidate()
+        waitStart = CACurrentMediaTime()
+        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 40, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
         }
     }
 
@@ -575,7 +558,7 @@ private final class IndicatorView: NSView {
         stopAll()
         if !wasVisible, style == .notch { plateW = retractedW; slide(to: expandedW) }
         phase = .finishing
-        glyph = nil; dotsAlpha = 0; retractFrom = nil
+        glyph = nil; retractFrom = nil
         outcome = (kind, now, from)
         let dur = Self.duration(kind), RETRACT = 0.36
         let timer = Timer(timeInterval: ANIM_INTERVAL, repeats: true) { [weak self] _ in
@@ -662,7 +645,7 @@ private final class IndicatorView: NSView {
         case .processing: drawBreath(ctx, breath(at: CACurrentMediaTime() - waitStart))
         case .pinned: drawPinned(ctx)
         case .unpinning: drawUnpinning(ctx)
-        case .preparing: drawDots(ctx)
+        case .preparing: drawBreath(ctx, breath(at: CACurrentMediaTime() - waitStart))
         case .countdown: drawCountdownOrb(ctx); drawRing(ctx)
         case .download: drawCountdownOrb(ctx); drawRing(ctx)   // calm orb + a ring that FILLS with progress
         case .hint: drawCountdownOrb(ctx); if let g = glyph { drawGlyph(ctx, g) }
@@ -874,21 +857,6 @@ private final class IndicatorView: NSView {
         ctx.drawRadialGradient(grad, startCenter: start, startRadius: 0,
                                endCenter: CGPoint(x: cx, y: cy), endRadius: r, options: [])
         ctx.restoreGState()
-    }
-
-    private func drawDots(_ ctx: CGContext) {
-        let rr = GK.spinR * dotsScale
-        for i in 0..<DOTS_N {
-            let a = CGFloat(i) * (360 / CGFloat(DOTS_N))
-            let d = (spinBase - a).truncatingRemainder(dividingBy: 360)
-            let dd = d < 0 ? d + 360 : d
-            let c = pow(1 - min(1, dd / DOT_FADE), 2.2)
-            let x = orbCx + rr * cos(a * .pi / 180)
-            let y = orbCy - rr * sin(a * .pi / 180)
-            let radius = 2.0 + 0.7 * c
-            ctx.setFillColor(cg(ACCENT_LO, (0.08 + 0.92 * c) * dotsAlpha))
-            ctx.fillEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
-        }
     }
 
     private func drawGlyph(_ ctx: CGContext, _ g: (kind: String, progress: CGFloat, alpha: CGFloat)) {

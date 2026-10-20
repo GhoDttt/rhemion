@@ -1,7 +1,11 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
+import RhemionStorage
 
 /// A read-only projection of the runtime's JSONL record; no runtime dependency.
-struct JournalEntry: Identifiable, Sendable, Equatable {
+struct JournalEntry: Identifiable, Sendable, Equatable, Codable {
     let id: String
     let ts: Date
     let engine: String
@@ -63,7 +67,7 @@ enum JournalGrouping: String, CaseIterable {
     case flat = "No grouping"
 }
 
-struct JournalGroup: Identifiable {
+struct JournalGroup: Identifiable, Sendable {
     enum Level { case month, week, day }
     let id: String
     let level: Level
@@ -77,45 +81,122 @@ struct JournalDoc: Sendable {
     let skippedLines: Int
     let unreadableFiles: Int
 
-    static func load(directory: URL = AppPaths.stateDir.appendingPathComponent("log", isDirectory: true)) -> JournalDoc {
+    static func load(directory: URL = AppPaths.stateDir.appendingPathComponent("log", isDirectory: true),
+                     saveInBackground: Bool = true) -> JournalDoc {
         let names: [String]
         do { names = try FileManager.default.contentsOfDirectory(atPath: directory.path) }
         catch {
             let missing = (error as NSError).code == NSFileReadNoSuchFileError
             return JournalDoc(entries: [], skippedLines: 0, unreadableFiles: missing ? 0 : 1)
         }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let seconds = ISO8601DateFormatter()
         var entries: [JournalEntry] = [], skipped = 0, unreadable = 0
-        var seen = Set<String>()
+        var seen = Set<String>(), parsed: [String: MonthCache.Month] = [:], fresh: [String: MonthCache.Month] = [:]
+        let saved = MonthCache.savedDirectory(forLog: directory)
         for name in names.sorted(by: >) where name.range(of: #"^dictate-\d{4}-(0[1-9]|1[0-2])\.jsonl$"#, options: .regularExpression) != nil {
-            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else {
-                unreadable += 1; continue
+            let url = directory.appendingPathComponent(name)
+            // A month whose file is as it was last time is not read again (only the current one usually changes).
+            guard let key = MonthCache.key(url) else { unreadable += 1; continue }
+            let month: MonthCache.Month
+            if let cached = MonthCache.month(url.path, key: key) { month = cached }
+            else if let stored = MonthCache.saved(name, in: saved, key: key) { month = stored }
+            else {
+                guard let data = try? Data(contentsOf: url) else { unreadable += 1; continue }
+                month = MonthCache.Month(key: key, data: data)
+                fresh[name] = month
             }
-            // Split bytes first: invalid UTF-8 in one line must not discard an entire month.
-            for line in data.split(separator: 0x0A) {
-                guard let object = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
-                      let id = object["id"] as? String, !id.isEmpty,
-                      let timestamp = object["ts"] as? String,
-                      let date = fractional.date(from: timestamp) ?? seconds.date(from: timestamp),
-                      let raw = object["raw"] as? String, let clean = object["clean"] as? String
-                else { skipped += 1; continue }
-                guard seen.insert(id).inserted else { continue }
-                entries.append(JournalEntry(
-                    id: id, ts: date, engine: object["engine"] as? String ?? "—",
-                    ms: object["ms"] as? Int, audioDurationMS: object["audio_duration_ms"] as? Int,
-                    raw: raw, clean: clean, enhanced: object["enhanced"] as? String,
-                    delivered: object["delivered"] as? Bool ?? false,
-                    deliveryMethod: object["delivery_method"] as? String,
-                    appName: object["app_name"] as? String, appBundleID: object["app_bundle_id"] as? String,
-                    audio: object["audio"] as? String, audioRetained: object["audio_retained"] as? Bool,
-                    preDictionary: object["pre_dictionary"] as? String,
-                    session: object["session"] as? String, deliveryError: object["delivery_error"] as? String))
-            }
+            parsed[url.path] = month
+            skipped += month.skipped
+            for entry in month.entries where seen.insert(entry.id).inserted { entries.append(entry) }
         }
+        MonthCache.keep(parsed)
+        // Months read from their logs are saved for the next launch; saved months whose log is gone go.
+        let kept = Set(parsed.keys.map { URL(fileURLWithPath: $0).lastPathComponent })
+        if saveInBackground { Task.detached(priority: .utility) { MonthCache.save(fresh, keeping: kept, in: saved) } }
+        else { MonthCache.save(fresh, keeping: kept, in: saved) }
         entries.sort { $0.ts == $1.ts ? $0.id > $1.id : $0.ts > $1.ts }
         return JournalDoc(entries: entries, skippedLines: skipped, unreadableFiles: unreadable)
+    }
+
+    /// The months read last time, by path: a file is read again only when its size, modification time or
+    /// identity changed. In memory, for this run of the app.
+    /// The months are also saved, as parsed, in `<stateDir>/journal-cache/` (one file per month, with the key of
+    /// the log it was read from): the next launch opens the Journal without parsing the logs again. A copy of the
+    /// journal text, so it goes with the Journal (StorageLayout `.transcripts`); any saved month that doesn't match
+    /// its log is simply read again.
+    enum MonthCache {
+        struct Key: Equatable, Sendable, Codable { let size: Int, modified: Date, inode: Int }
+        struct Month: Sendable, Codable {
+            static let format = 1   // bump when JournalEntry or the parse changes: saved months are then read again
+            var format = Month.format
+            let key: Key, entries: [JournalEntry], skipped: Int
+            init(key: Key, data: Data) {
+                // Date.ISO8601FormatStyle: ISO8601DateFormatter took two thirds of the parse.
+                let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true), seconds = Date.ISO8601FormatStyle()
+                var entries: [JournalEntry] = [], skipped = 0
+                // Split bytes first: invalid UTF-8 in one line must not discard an entire month.
+                for line in data.split(separator: 0x0A) {
+                    guard let object = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                          let id = object["id"] as? String, !id.isEmpty,
+                          let timestamp = object["ts"] as? String,
+                          let date = (try? fractional.parse(timestamp)) ?? (try? seconds.parse(timestamp)),
+                          let raw = object["raw"] as? String, let clean = object["clean"] as? String
+                    else { skipped += 1; continue }
+                    entries.append(JournalEntry(
+                        id: id, ts: date, engine: object["engine"] as? String ?? "—",
+                        ms: object["ms"] as? Int, audioDurationMS: object["audio_duration_ms"] as? Int,
+                        raw: raw, clean: clean, enhanced: object["enhanced"] as? String,
+                        delivered: object["delivered"] as? Bool ?? false,
+                        deliveryMethod: object["delivery_method"] as? String,
+                        appName: object["app_name"] as? String, appBundleID: object["app_bundle_id"] as? String,
+                        audio: object["audio"] as? String, audioRetained: object["audio_retained"] as? Bool,
+                        preDictionary: object["pre_dictionary"] as? String,
+                        session: object["session"] as? String, deliveryError: object["delivery_error"] as? String))
+                }
+                self.key = key; self.entries = entries; self.skipped = skipped
+            }
+        }
+        private static let lock = NSLock()
+        private nonisolated(unsafe) static var months: [String: Month] = [:]
+        static func key(_ url: URL) -> Key? {
+            guard let a = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = (a[.size] as? NSNumber)?.intValue, let modified = a[.modificationDate] as? Date,
+                  let inode = (a[.systemFileNumber] as? NSNumber)?.intValue else { return nil }
+            return Key(size: size, modified: modified, inode: inode)
+        }
+        static func month(_ path: String, key: Key) -> Month? {
+            lock.lock(); defer { lock.unlock() }
+            return months[path].flatMap { $0.key == key ? $0 : nil }
+        }
+        /// What the last load read: months gone from the folder are forgotten.
+        static func keep(_ read: [String: Month]) { lock.lock(); months = read; lock.unlock() }
+        /// Forget what this run read (tests).
+        static func forgetRead() { keep([:]) }
+
+        static func savedDirectory(forLog log: URL) -> URL {
+            log.deletingLastPathComponent().appendingPathComponent(StorageLayout.journalCacheFolder, isDirectory: true)
+        }
+        static func saved(_ name: String, in directory: URL, key: Key) -> Month? {
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+                  let month = try? JSONDecoder().decode(Month.self, from: data),
+                  month.format == Month.format, month.key == key else { return nil }
+            return month
+        }
+        static func save(_ fresh: [String: Month], keeping names: Set<String>, in directory: URL) {
+            let fm = FileManager.default
+            if !fresh.isEmpty {
+                do {
+                    try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    for (name, month) in fresh {
+                        let url = directory.appendingPathComponent(name)
+                        try JSONEncoder().encode(month).write(to: url, options: .atomic)
+                        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                    }
+                } catch { log("journal cache not saved: \(error.localizedDescription)") }
+            }
+            for name in (try? fm.contentsOfDirectory(atPath: directory.path)) ?? [] where !names.contains(name) {
+                try? fm.removeItem(at: directory.appendingPathComponent(name))
+            }
+        }
     }
 
     /// ISO weeks use the local time zone, including ISO week-years at the December boundary.

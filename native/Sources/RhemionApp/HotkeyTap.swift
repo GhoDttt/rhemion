@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // HotkeyTap — global push-to-talk on a bare modifier.
 // A CGEventTap (session, flagsChanged+keyDown, listen-only) keyed on the DEVICE-specific modifier
 // bit (Right Option = 0x40), so it fires under Secure Keyboard Entry.
@@ -66,6 +69,9 @@ final class HotkeyTap: @unchecked Sendable {
     var onStart: (@Sendable (Int32, Bool) -> Void)?
     /// Called (on the main run loop) when PTT releases (or a missed release self-heals).
     var onStop: (@Sendable () -> Void)?
+    /// Called (on the main run loop) when the held dictation key turns out to be part of a shortcut: another key
+    /// or modifier joined it (⌘W with Right Command). The take was never meant: the app discards it silently.
+    var onChord: (@Sendable () -> Void)?
     /// Called on the main run loop while latched hands-free is silent: `remaining` shrinks 1→0 as the
     /// countdown ring depletes; onCountdownCancel fires when speech resumes.
     var onCountdown: (@Sendable (Double) -> Void)?
@@ -158,7 +164,7 @@ final class HotkeyTap: @unchecked Sendable {
 
     // MARK: - event handling (main run loop)
 
-    fileprivate func handle(type: CGEventType, event: CGEvent) {
+    func handle(type: CGEventType, event: CGEvent) {   // internal for tests (ChordGuardTests)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }   // re-enable if the system disabled us
             return
@@ -169,6 +175,9 @@ final class HotkeyTap: @unchecked Sendable {
             // Self-heal a missed/coalesced release (only when NOT latched): a keyDown while we think
             // we're held but the PTT modifier is up means the release event was lost.
             if held && !handsfree && (flags & pttDeviceMask) == 0 { pttWasDown = false; doStop() }
+            // A key pressed while the dictation key is held: it is a shortcut, not a dictation. For the whole hold,
+            // not the first few ms, so a slow chord is caught too; the start stays instant.
+            else if held && !handsfree && pttWasDown { chord() }
             return
         }
         // flagsChanged: act on the PTT bit's EDGE, not on it merely being set — otherwise ANY modifier
@@ -183,6 +192,8 @@ final class HotkeyTap: @unchecked Sendable {
         let journalModAlone = journalModLogical != 0 && others == journalModLogical
         let journalOnly = journalModAlone && journalOnlyEnabled
         let otherHeld = others != 0 && !journalModAlone
+        // A modifier joining the held dictation key (⌘⇧ with Right Command): also a shortcut.
+        if held && !handsfree && pttDown && !pressed && otherHeld { chord(); return }
         if pressed {
             // A double tap to leave hands-free (the natural "stop" gesture): the first tap stops, the second
             // one must not start a new take (it used to, and its instant cancel hid the result).
@@ -244,6 +255,12 @@ final class HotkeyTap: @unchecked Sendable {
         stopSilenceWatch()
         pendingTimer?.invalidate(); pendingTimer = nil
         held = false; handsfree = false; pending = false
+    }
+
+    /// The held key was part of a shortcut: drop the take (no stop, no hands-free), and let its release pass.
+    private func chord() {
+        abortRecording()
+        onChord?()
     }
 
     /// One stop path: hold-release, single-tap, tap-while-latched, silence timeout.

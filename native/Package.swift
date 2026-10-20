@@ -24,11 +24,11 @@ var targets: [Target] = [
     .target(name: "RhemionStorage"),
     .target(name: "RhemionRuntime", dependencies: ["RhemionCore", "RhemionIPC", "RhemionAudio", "RhemionASR", "RhemionStorage"]),
     .target(name: "RhemionAudio"),
-    .target(name: "RhemionASR", dependencies: ["RhemionAudio", .product(name: "FluidAudio", package: "FluidAudio")]),
+    .target(name: "RhemionASR", dependencies: ["RhemionAudio", "RhemionCore", .product(name: "FluidAudio", package: "FluidAudio")]),
     .target(name: "RhemionDelivery"),
     .executableTarget(name: "rhemion-runtime", dependencies: ["RhemionRuntime", "RhemionCore", "RhemionIPC", "RhemionAudio", "RhemionASR", "RhemionDelivery"]),
     // The menu-bar app. Bundled into Rhemion.app (with rhemion-runtime as its helper) by deploy/build-app.sh.
-    .executableTarget(name: "RhemionApp", dependencies: ["RhemionIPC", "RhemionStorage"]),
+    .executableTarget(name: "RhemionApp", dependencies: ["RhemionIPC", "RhemionStorage", "RhemionCore"]),
 ]
 
 // Developer tools (not part of the app).
@@ -38,27 +38,15 @@ if present("Sources/rhemion-history") {
 }
 if present("Sources/asr-compare") {
     products.append(.executable(name: "asr-compare", targets: ["asr-compare"]))
-    targets.append(.executableTarget(name: "asr-compare", dependencies: ["RhemionASR"]))
+    targets.append(.executableTarget(name: "asr-compare", dependencies: ["RhemionASR", "RhemionCore"]))
 }
-if present("deploy/rhemion-devices.swift") && present("deploy/rhemion-models.swift") {
-    let deployExtras = ["hammerspoon", "notch.swift", "paste.swift", "rhemion", "rhemion-config"]
-    products += [.executable(name: "rhemion-devices", targets: ["rhemion-devices"]),
-                 .executable(name: "rhemion-models", targets: ["rhemion-models"])]
-    targets += [
-        .executableTarget(name: "rhemion-devices", dependencies: ["RhemionAudio"], path: "deploy",
-                          exclude: deployExtras + ["rhemion-models.swift"], sources: ["rhemion-devices.swift"]),
-        .executableTarget(name: "rhemion-models", dependencies: ["RhemionASR", "RhemionCore"], path: "deploy",
-                          exclude: deployExtras + ["rhemion-devices.swift"], sources: ["rhemion-models.swift"]),
-    ]
-}
-
 if present("Tests") {
     targets += [
         .testTarget(name: "RhemionCoreTests", dependencies: ["RhemionCore"]),
         .testTarget(name: "RhemionIPCTests", dependencies: ["RhemionIPC"]),
         .testTarget(name: "RhemionRuntimeTests", dependencies: ["RhemionRuntime", "RhemionCore", "RhemionAudio", "RhemionASR", "RhemionDelivery", "RhemionStorage"]),
         .testTarget(name: "RhemionAudioTests", dependencies: ["RhemionAudio"]),
-        .testTarget(name: "RhemionASRTests", dependencies: ["RhemionASR", "RhemionAudio", "RhemionStorage"]),
+        .testTarget(name: "RhemionASRTests", dependencies: ["RhemionASR", "RhemionAudio", "RhemionStorage", "RhemionCore"]),
         .testTarget(name: "RhemionDeliveryTests", dependencies: ["RhemionDelivery"]),
         .testTarget(name: "RhemionStorageTests", dependencies: ["RhemionStorage"]),
         .testTarget(name: "RhemionAppTests", dependencies: ["RhemionApp"]),
@@ -70,8 +58,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: products,
     dependencies: [
-        // Apache-2.0 (links cleanly into MIT Rhemion). Pinned to a known-good revision.
-        .package(url: "https://github.com/FluidInference/FluidAudio", revision: "c7b13a3942e79893f3bd76bfe3b1ed8d03e0bfc7"),
+        // Apache-2.0 (links cleanly into MPL-2.0 Rhemion). Pinned to a known-good revision.
+        .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.17.7", traits: []),
     ],
     targets: targets
 )

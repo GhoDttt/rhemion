@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // AppController's menus: the app's main menu (shown while a window is up), the menu-bar menu's delegate, and
 // the no-icons rule for every menu (moved out of main.swift unchanged).
 

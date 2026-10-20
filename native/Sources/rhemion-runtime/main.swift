@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 import AppKit
 import AVFoundation
@@ -13,6 +16,15 @@ import RhemionRuntime
 // snapshots) is 0600 and every directory 0700 by default -- not world-readable 0644/0755. Explicit
 // per-file permissions below are defense-in-depth on top of this.
 umask(0o077)
+
+// Uninstall: give back the language packs macOS holds for this program, then quit. Reservations belong to this
+// executable's identity, so only it can release them.
+if CommandLine.arguments.contains("--release-speech-packs") {
+    let done = DispatchSemaphore(value: 0)
+    Task { await AppleSpeech.releaseReservations(); done.signal() }
+    _ = done.wait(timeout: .now() + 20)
+    exit(0)
+}
 
 struct ConnectionSink: LineSink {
     let connection: UnixSocketConnection
@@ -89,11 +101,12 @@ let transcriber = Transcriber(registry: engineRegistry, defaultEngineID: startup
 // and only reveal the problem as a canceled take. Surface it loudly at startup instead.
 if engineRegistry.ids.isEmpty {
     logToStderr("[model] WARNING: no recognition models found -- dictation will produce no transcript. "
-        + "Run `rhemion models`; download parakeet-v3 (FluidAudio cache) or add a whisper model dir via `model_dirs`.")
+        + "Run `rhemion models`; download \(ModelCatalog.defaultID) (FluidAudio cache) or add a whisper model dir via `model_dirs`.")
 } else {
     logToStderr("[model] startup model=\(startupModelID); registered=[\(engineRegistry.ids.sorted().joined(separator: ", "))]")
 }
-logToStderr("[lang] policy=\(LanguagePolicy(setting: startupSettings.language).whisperFlag)")
+logToStderr("[lang] languages=\(startupSettings.languages) recognition=\(startupSettings.recognition)")
+Task { logToStderr("[apple] reserved packs=\(await AppleSpeech.reservedLanguages())") }
 
 // The model to use for THIS take: the pinned env override, else the current snapshot's model
 // (re-read from disk, matching how the mic setting hot-reloads) -- but only if it is a REGISTERED
@@ -110,46 +123,93 @@ let resolveModelID: @Sendable () -> String = {
 // take (matching how the model selection above hot-reloads, so a language change applies to the
 // next dictation without a restart).
 let resolveLanguage: @Sendable () -> LanguagePolicy = {
-    LanguagePolicy(setting: SettingsSnapshot.load().language)
+    let snapshot = SettingsSnapshot.load()
+    return snapshot.languages.isEmpty ? LanguagePolicy(setting: snapshot.language)
+        : LanguagePolicy(languages: snapshot.languages, limit: snapshot.recognition == "limit")
 }
 
-// Warm the selected model at startup so the FIRST live dictation is instant. Parakeet's first
-// call otherwise pays a ~20s cold model load+compile; since its actor serializes transcription,
-// every dictation held during that window queues and then flushes in a burst (observed live).
-// Only the startup model is warmed (whisper models shell out per take and need no keep-warm; a
-// live switch to another parakeet model pays its cold load once on first use).
-// Fire-and-forget at utility priority: the runtime starts listening immediately and the warm-up
-// finishes in the background before the user's first real dictation completes.
-// `startupWarm` tells the app (via the `.devices` report) when the startup model is ready, so it can show
-// "Preparing speech model" instead of claiming ready while a first-time compile still runs.
-final class WarmFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
-    func set() { lock.lock(); value = true; lock.unlock() }
+// Apple Speech hears one language per take: the first of the user's languages it knows (they are in the user's
+// order, the Mac's preferred languages on first run), else the first language.
+let appleLanguage: @Sendable () async -> LanguagePolicy = {
+    .only(await AppleSpeech.language(for: SettingsSnapshot.load().languages))
 }
-let startupWarm = WarmFlag()
-let startupDamaged = WarmFlag()   // set when the startup model could not be prepared even after a retry
-if let warmEngine = engineRegistry.engine(id: startupModelID) {
-    Task.detached(priority: .utility) {
-        let start = Date()
-        var warmed = await warmEngine.prewarm()
-        if !warmed {
-            logToStderr("[model] prewarm(\(startupModelID)) failed; retrying once")
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            warmed = await warmEngine.prewarm()
-        }
-        // Never leave the app on "Preparing" forever. A model that cannot be prepared twice is reported as
-        // damaged: the app says so and offers a fresh download, instead of showing Ready and failing later.
-        if !warmed { startupDamaged.set() }
-        startupWarm.set()
-        logToStderr(warmed
-            ? "[timing] prewarm(\(startupModelID)) done in \(String(format: "%.1f", Date().timeIntervalSince(start)))s"
-            : "[model] prewarm(\(startupModelID)) failed twice; reported as damaged")
+
+// Whisper and Qwen detect the language unless told: with one dictation language they are told, which saves Whisper
+// a second of work per take; with several they detect among all they know.
+let whisperLanguage: @Sendable () -> LanguagePolicy = {
+    let languages = SettingsSnapshot.load().languages
+    return languages.count == 1 ? .only(languages[0]) : resolveLanguage()
+}
+
+// A model in rhemion-transcribe, by what its file says: one that detects is told the language when the user has one
+// (whisperLanguage); one that doesn't is told the first of the user's languages it knows, else its own first.
+let helperProfiles = Dictionary(discoveredModels.compactMap { e in e.profile.map { (e.id, $0) } }, uniquingKeysWith: { a, _ in a })
+let helperLanguage: @Sendable (String) -> LanguagePolicy? = { id in
+    guard let profile = helperProfiles[id] else {
+        return id.hasPrefix("whisper-") || id.hasPrefix("qwen3-asr") ? whisperLanguage() : nil
     }
-} else {
-    startupWarm.set()   // nothing to warm
+    if profile.detects { return whisperLanguage() }
+    let mine = SettingsSnapshot.load().languages
+    guard let code = mine.first(where: profile.languages.contains) ?? profile.languages.first else { return nil }
+    return .only(code)
 }
+
+// Warm the active model so every dictation is instant. Parakeet's first call otherwise pays a cold model
+// load+compile (~20s the first time); since its actor serializes transcription, every dictation held during
+// that window would queue and then flush in a burst (observed live). The active model starts as the startup
+// model; when the user picks another (`.useModel`), the runtime prepares that one and only then frees the
+// one it replaces, so a take already running finishes on the old model and only one model holds memory
+// (16 GB Macs can't hold two). Whisper and Qwen run in the rhemion-transcribe helper, which holds its model the same way.
+// `ModelWarmth` tells the app (via the `.devices` report) when the active model is ready, so it can show
+// "Preparing speech model" instead of claiming ready while a first-time compile still runs.
+final class ModelWarmth: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active: String
+    private var warm = false
+    private var damaged = false
+    private var generation = 0
+    init(active: String) { self.active = active }
+
+    var state: (active: String, warm: Bool, damaged: Bool) {
+        lock.lock(); defer { lock.unlock() }; return (active, warm, damaged)
+    }
+    /// Start preparing `id`; the returned generation tells a finished prewarm whether it is still current.
+    func begin(_ id: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        active = id; warm = false; damaged = false; generation += 1
+        return generation
+    }
+    /// Record the result if no newer switch happened meanwhile; true when it was still current.
+    func finish(_ gen: Int, warmed: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard gen == generation else { return false }
+        warm = true; damaged = !warmed
+        return true
+    }
+}
+let warmth = ModelWarmth(active: startupModelID)
+
+/// Prepare `id` (one retry), then free every other registered model. Never leaves the app on "Preparing"
+/// forever: a model that cannot be prepared twice is reported as damaged, and the app offers a fresh download.
+@Sendable func activate(_ id: String) async {
+    let gen = warmth.begin(id)
+    guard let engine = engineRegistry.engine(id: id) else { _ = warmth.finish(gen, warmed: true); return }
+    let start = Date()
+    var warmed = await engine.prewarm()
+    if !warmed {
+        logToStderr("[model] prewarm(\(id)) failed; retrying once")
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        warmed = await engine.prewarm()
+    }
+    guard warmth.finish(gen, warmed: warmed) else { return }   // superseded by a newer switch
+    logToStderr(warmed
+        ? "[timing] prewarm(\(id)) done in \(String(format: "%.1f", Date().timeIntervalSince(start)))s"
+        : "[model] prewarm(\(id)) failed twice; reported as damaged")
+    for other in engineRegistry.ids where other != id {
+        await engineRegistry.engine(id: other)?.unload()
+    }
+}
+Task.detached(priority: .utility) { await activate(startupModelID) }
 
 // Transcript producer: runs the selected engine over the WAV URL RuntimeService snapshotted
 // at stop-time (passed in, not re-read here) -- reading `captureController.lastTakeURL` late,
@@ -161,7 +221,9 @@ let transcriptProducer: (@Sendable (String, URL) async -> TranscriptResult?)? = 
         guard let samples = try? WAVReader.readInt16Mono16k(wav), AudioGate.worthTranscribing(samples) else {
             return nil
         }
-        return await transcriber.run(wav: wav, engineID: resolveModelID(), language: resolveLanguage())
+        let id = resolveModelID()
+        let language = id == AppleSpeech.modelID ? await appleLanguage() : helperLanguage(id) ?? resolveLanguage()
+        return await transcriber.run(wav: wav, engineID: id, language: language)
 }
 
 // Composition root for delivery: a hot-reloading dictionary store (the file need not exist
@@ -210,18 +272,22 @@ let service = RuntimeService(
         // engine registry, mics from the same CoreAudio enumeration the capture layer selects from —
         // so the app's Settings pickers can never list something selection wouldn't actually use.
         let snapshot = SettingsSnapshot.load()
-        // Only the startup model is prewarmed; any other model counts as warm (it loads on first use).
+        // Only the active model is prewarmed; any other model counts as warm (it loads on first use).
+        let active = warmth.state
         let models = ModelRegistry.discover(extraDirs: snapshot.modelDirs).map {
             ModelOption(id: $0.id, label: $0.label, engine: $0.engine, found: $0.found,
-                        warm: $0.id != startupModelID || startupWarm.isSet,
-                        damaged: $0.id == startupModelID && startupDamaged.isSet)
+                        warm: $0.id != active.active || active.warm,
+                        damaged: $0.id == active.active && active.damaged,
+                        languages: $0.profile?.languages, handling: $0.profile?.languageHandling.rawValue,
+                        maxSeconds: $0.profile?.maxSeconds, softLimit: $0.profile?.softLimit ?? false)
         }
         let mics = CoreAudioDeviceEnumerator.inputDevices().map {
             MicOption(uid: $0.uid, name: $0.name, builtIn: $0.isBuiltIn)
         }
         return (models: models, mics: mics)
     },
-    modelDownloader: RuntimeService.fluidDownloader(replace: { startupDamaged.isSet }),
+    modelUser: { id in await activate(id) },
+    modelDownloader: RuntimeService.fluidDownloader(replace: { warmth.state.damaged }),
     speechCheck: { wav in
         guard let samples = try? WAVReader.readInt16Mono16k(wav) else { return false }
         return AudioGate.worthTranscribing(samples)
@@ -246,15 +312,16 @@ levelRouter.onLevel = { rms in
 // a while" if the OS evicts the model during a long idle -- the whole point of the tool is to hear
 // instantly, every time, not just right after startup. Skipped while a dictation is active so it
 // never queues ahead of real audio on the engine's serial actor. Utility priority; ~100ms warm.
-// Warms the startup model (a Parakeet model by default): it is the one with a resident ANE program
-// to keep hot; whisper models shell out per take and need no keep-warm, so a live switch is fine.
-if let warmEngine = engineRegistry.engine(id: startupModelID) {
-    Task.detached(priority: .utility) {
-        while true {
-            try? await Task.sleep(nanoseconds: 60_000_000_000)   // 60s
-            if await service.isRecording() { continue }
-            await warmEngine.prewarm()
-        }
+// Warms the active model (it follows `.useModel`): it is the one with a resident ANE program to keep hot;
+// whisper models shell out per take and need no keep-warm. Skipped while the active model is still being
+// prepared, so the heartbeat never races a switch.
+Task.detached(priority: .utility) {
+    while true {
+        try? await Task.sleep(nanoseconds: 60_000_000_000)   // 60s
+        if await service.isRecording() { continue }
+        let active = warmth.state
+        guard active.warm, !active.damaged, let engine = engineRegistry.engine(id: active.active) else { continue }
+        await engine.prewarm()
     }
 }
 
@@ -267,8 +334,11 @@ Task.detached(priority: .utility) {
     let stateDir = RuntimePaths.stateDirectory(), historyDir = RuntimePaths.historyDirectory()
     let startupMonth = HistoryStore.month(Date())
     // Recover interrupted takes FIRST: the reconcile below deletes recordings no journal row points at.
-    let interrupted = SpoolRecovery.collect(historyDirectory: historyDir, stateDirectory: stateDir,
-                                            knownIDs: await history.knownIDs(), startedAt: runtimeStartedAt)
+    // An unreadable log could already hold any take: recover nothing rather than journal one twice.
+    let known = await history.knownIDs()
+    if known == nil { logToStderr("[spool] recovery skipped: a journal log could not be read") }
+    let interrupted = known.map { SpoolRecovery.collect(historyDirectory: historyDir, stateDirectory: stateDir,
+                                                        knownIDs: $0, startedAt: runtimeStartedAt) } ?? []
     if !interrupted.isEmpty {
         logToStderr("[spool] recovering \(interrupted.count) interrupted take(s)")
         await service.recoverInterruptedTakes(interrupted)

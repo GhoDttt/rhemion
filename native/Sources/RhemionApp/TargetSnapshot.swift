@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Where a dictation started: the app, its focused window and focused field, captured at the press, so the
 // delivery can tell whether focus is still there (3.1 "perfect insertion"). The capture runs off the hot path
 // with a short AX timeout. Chromium can hand out a new AX object for the same field after a re-render, so a

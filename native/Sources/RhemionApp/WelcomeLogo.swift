@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // The animated Rhemion logo for the Welcome window, drawn natively (no image asset). The orb is the user's
 // double in the machine — their voice inside the Mac; the rings are layers of air around it. Motion (story A,
 // "the voice goes out into the world"): an intro (the orb appears,

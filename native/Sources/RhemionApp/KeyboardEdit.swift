@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // KeyboardEdit — the shared low-level "erase the last delivered text" primitive behind both in-place
 // reversal gestures: undo-replace (deletes, then pastes the original back) and double-Esc delete
 // (deletes and stops). Backspace events are posted DIRECTLY to a pid (never the global HID tap), so

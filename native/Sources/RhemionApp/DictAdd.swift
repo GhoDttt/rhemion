@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // DictAdd — a global hotkey that adds a word to the recognition dictionary from the current text
 // selection. On the press it reads the AX selection (BEFORE any panel opens, so
 // the original field is still focused) and hands it to the app, which opens the "as heard → correct"

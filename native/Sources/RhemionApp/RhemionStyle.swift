@@ -1,38 +1,181 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import AppKit
 import SwiftUI
 
-/// Shared design tokens for the hub — the single source of truth the hub shell and the
-/// Settings / Journal / Dictionary panes draw from. Values match the
-/// current `JournalStyle` (gold #E0A42E, layered neutral surfaces, Mulish).
-///
-/// NOTE: `JournalStyle` in JournalWindow.swift still carries its own copy of these tokens; when the
-/// Journal pane moves into the hub it folds into this type so there is one palette, not two.
-enum RhemionStyle {
+/// The design tokens: the one palette every window draws from (gold #E0A42E, layered neutral surfaces,
+/// Mulish). A colour or an appearance recipe lives here and nowhere else, so a theme can change it in one
+/// place.
+/// One appearance's tokens: every colour and appearance recipe the app draws with.
+/// Light and dark are two instances; another theme is another instance, with no change to any screen.
+struct RhemionTheme {
+    /// A shadow as one value: colour (with its opacity), blur radius, vertical offset.
+    struct Shadow { let color: Color; let radius: CGFloat; let y: CGFloat }
+
+    // Ink
+    let text, secondary, tertiary: Color
+    /// Ink on a gold fill (a ticked checkbox's check, the menu row under the pointer).
+    let onAccent: Color
+    // Grounds
+    let rail, content, win, line, hover, activeSurface: Color
+    // Accent and status
+    let gold, selected, danger, success: Color
+    /// Gold washes: a progress fill (Download), a notice band, search hits.
+    let goldWash, noticeWash, searchHit: Color
+    /// A row under the pointer in a list (Journal).
+    let rowHover: Color
+    /// A slider's played track.
+    let track: Color
+    /// The hairline that lifts a raised surface off the page (active tile, pop-up card).
+    let edge: Color
+    let checkboxEdge: Color
+    // Shadows
+    let raisedShadow, tileShadow, knobShadow, menuShadow, tooltipShadow: Shadow
+    // Primary button (the one next step of a screen)
+    let primaryFill, primaryInk, primaryEdge: Color
+    let primaryShadow: Shadow
+    // AppKit text views
+    let nsText, nsTextSelection: NSColor
+
     static let gold = Color(rhemionHex: 0xE0A42E)
-    /// THE one danger red for every destructive action and warning (Delete, Uninstall, "can't be undone"):
-    /// the system red, so it adapts to light/dark (#FF3B30 / #FF453A) and matches native destructive UI.
     static let danger = Color(nsColor: .systemRed)
-    /// The one green: something is ready or granted (Welcome, Speech model, the Journal's export dot). Never decoration.
     static let success = Color(rhemionHex: 0x2E9E5B)
 
-    static func text(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0xE8E8EC : 0x1D1D1F) }
-    static func secondary(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0xA8A8AE : 0x5F5F66) }
-    static func tertiary(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x909098 : 0x9A9AA1) }
+    static let light = RhemionTheme(
+        text: Color(rhemionHex: 0x1D1D1F), secondary: Color(rhemionHex: 0x5F5F66), tertiary: Color(rhemionHex: 0x9A9AA1),
+        onAccent: .white,
+        rail: Color(rhemionHex: 0xF5F5F7), content: Color(rhemionHex: 0xFFFFFF), win: Color(rhemionHex: 0xFFFFFF),
+        line: Color(rhemionHex: 0xE5E5E9), hover: Color(rhemionHex: 0xEFEFF2), activeSurface: Color(rhemionHex: 0xFFFFFF),
+        gold: gold, selected: Color(rhemionHex: 0xF6DD84), danger: danger, success: success,
+        goldWash: gold.opacity(0.22), noticeWash: gold.opacity(0.12), searchHit: gold.opacity(0.35),
+        rowHover: Color(rhemionHex: 0xE5E5E9).opacity(0.6), track: Color(rhemionHex: 0x9A9AA1).opacity(0.55),
+        edge: Color.black.opacity(0.12), checkboxEdge: Color.black.opacity(0.42),
+        raisedShadow: Shadow(color: .black.opacity(0.06), radius: 1.5, y: 1),
+        tileShadow: Shadow(color: .black.opacity(0.14), radius: 2, y: 1),
+        knobShadow: Shadow(color: .black.opacity(0.14), radius: 1.5, y: 1),
+        menuShadow: Shadow(color: .black.opacity(0.22), radius: 17, y: 12),
+        tooltipShadow: Shadow(color: .black.opacity(0.12), radius: 6, y: 2),
+        primaryFill: Color(rhemionHex: 0xF6DD84), primaryInk: Color(rhemionHex: 0x5A4410), primaryEdge: gold.opacity(0.35),
+        primaryShadow: Shadow(color: .black.opacity(0.05), radius: 1.5, y: 1),
+        nsText: NSColor(rhemionHex: 0x1D1D1F), nsTextSelection: NSColor(rhemionHex: 0xF6DD84).withAlphaComponent(0.70))
 
+    static let dark = RhemionTheme(
+        text: Color(rhemionHex: 0xE8E8EC), secondary: Color(rhemionHex: 0xA8A8AE), tertiary: Color(rhemionHex: 0x909098),
+        onAccent: .white,
+        rail: Color(rhemionHex: 0x242426), content: Color(rhemionHex: 0x1E1E20), win: Color(rhemionHex: 0x232326),
+        line: Color(rhemionHex: 0x37373B), hover: Color(rhemionHex: 0x2C2C30), activeSurface: Color(rhemionHex: 0x343438),
+        gold: gold, selected: gold.opacity(0.20), danger: danger, success: success,
+        goldWash: gold.opacity(0.22), noticeWash: gold.opacity(0.12), searchHit: gold.opacity(0.35),
+        rowHover: Color(rhemionHex: 0x37373B).opacity(0.6), track: Color(rhemionHex: 0x909098).opacity(0.55),
+        edge: Color.white.opacity(0.16), checkboxEdge: Color.white.opacity(0.42),
+        raisedShadow: Shadow(color: .black.opacity(0.22), radius: 1.5, y: 1),
+        tileShadow: Shadow(color: .black.opacity(0.28), radius: 2, y: 1),
+        knobShadow: Shadow(color: .black.opacity(0.30), radius: 1.5, y: 1),
+        menuShadow: Shadow(color: .black.opacity(0.44), radius: 17, y: 12),
+        tooltipShadow: Shadow(color: .black.opacity(0.35), radius: 6, y: 2),
+        primaryFill: gold.opacity(0.20), primaryInk: Color(rhemionHex: 0xE8D9A8), primaryEdge: gold.opacity(0.42),
+        primaryShadow: Shadow(color: .black.opacity(0.20), radius: 1.5, y: 1),
+        nsText: NSColor(rhemionHex: 0xE8E8EC), nsTextSelection: NSColor(rhemionHex: 0xF6DD84).withAlphaComponent(0.32))
+
+    /// The theme for an appearance, from the chosen family (Settings › General › Theme).
+    static func resolve(_ dark: Bool) -> RhemionTheme { ThemeStore.shared.family.theme(dark: dark) }
+}
+
+/// A theme as the user picks it: a name and its light and dark token sets. System / Light / Dark (the
+/// appearance) chooses between the two; the family chooses the look.
+struct ThemeFamily: Identifiable {
+    let id: String
+    let name: String
+    let light: RhemionTheme
+    let dark: RhemionTheme
+    func theme(dark: Bool) -> RhemionTheme { dark ? self.dark : light }
+
+    static let rhemion = ThemeFamily(id: "rhemion", name: "Rhemion", light: .light, dark: .dark)
+    /// Every theme Settings offers, in its order. A new theme is one more entry here.
+    static let all: [ThemeFamily] = [.rhemion]
+    static func named(_ id: String) -> ThemeFamily { all.first { $0.id == id } ?? .rhemion }
+}
+
+/// The chosen theme family. Every window root observes it (`themedRoot()`) and redraws when it changes, so
+/// a switch reaches every open window and panel at once.
+final class ThemeStore: ObservableObject, @unchecked Sendable {
+    static let shared = ThemeStore()
+    private let lock = NSLock()
+    private var current = ThemeFamily.rhemion
+    var family: ThemeFamily {
+        get { lock.lock(); defer { lock.unlock() }; return current }
+        set {
+            guard newValue.id != family.id else { return }
+            objectWillChange.send()
+            lock.lock(); current = newValue; lock.unlock()
+        }
+    }
+}
+
+private struct RhemionThemeKey: EnvironmentKey {
+    static let defaultValue = RhemionTheme.light
+}
+
+extension EnvironmentValues {
+    /// The theme for this view's appearance, set at every window root by `themedRoot()`.
+    var rhemionTheme: RhemionTheme {
+        get { self[RhemionThemeKey.self] }
+        set { self[RhemionThemeKey.self] = newValue }
+    }
+}
+
+/// A window or panel root: follows the chosen theme family and the appearance, and hands the resolved theme
+/// down the environment.
+private struct ThemedRoot: ViewModifier {
+    @ObservedObject private var store = ThemeStore.shared
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content
+            .environment(\.rhemionTheme, store.family.theme(dark: scheme == .dark))
+            .id(store.family.id)   // a new family redraws the whole tree with its tokens
+    }
+}
+
+extension View {
+    func themedRoot() -> some View { modifier(ThemedRoot()) }
+}
+
+extension View {
+    func themeShadow(_ s: RhemionTheme.Shadow) -> some View { shadow(color: s.color, radius: s.radius, y: s.y) }
+}
+
+/// The tokens by appearance, as every view reads them today (`RhemionStyle.text(dark)`): a thin adapter over
+/// `RhemionTheme`, so screens never hold a colour of their own.
+enum RhemionStyle {
+    static let gold = RhemionTheme.gold
+    /// THE one danger red for every destructive action and warning (Delete, Uninstall, "can't be undone"):
+    /// the system red, so it adapts to light/dark (#FF3B30 / #FF453A) and matches native destructive UI.
+    static let danger = RhemionTheme.danger
+    /// The one green: something is ready or granted (Welcome, Speech model, the Journal's export dot). Never decoration.
+    static let success = RhemionTheme.success
+
+    static func theme(_ dark: Bool) -> RhemionTheme { RhemionTheme.resolve(dark) }
+    static func text(_ dark: Bool) -> Color { theme(dark).text }
+    static func secondary(_ dark: Bool) -> Color { theme(dark).secondary }
+    static func tertiary(_ dark: Bool) -> Color { theme(dark).tertiary }
     /// The rail / sidebar ground (recessed relative to content).
-    static func rail(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x242426 : 0xF5F5F7) }
+    static func rail(_ dark: Bool) -> Color { theme(dark).rail }
     /// The main content ground.
-    static func content(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x1E1E20 : 0xFFFFFF) }
+    static func content(_ dark: Bool) -> Color { theme(dark).content }
     /// A raised neutral surface — the "on/active" language (never an accent fill).
-    static func win(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x232326 : 0xFFFFFF) }
-    static func line(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x37373B : 0xE5E5E9) }
-    static func hover(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x2C2C30 : 0xEFEFF2) }
-    /// The surface of an "on" control (segment, rail item, toolbar toggle). In dark it is lifted ABOVE the
-    /// track (#343438 over #242426) — `win` there is a hair darker than the rail, so the tile read as sunken.
-    static func activeSurface(_ dark: Bool) -> Color { Color(rhemionHex: dark ? 0x343438 : 0xFFFFFF) }
-
+    static func win(_ dark: Bool) -> Color { theme(dark).win }
+    static func line(_ dark: Bool) -> Color { theme(dark).line }
+    static func hover(_ dark: Bool) -> Color { theme(dark).hover }
+    /// The surface of an "on" control (segment, rail item, toolbar toggle), lifted above the track in dark.
+    static func activeSurface(_ dark: Bool) -> Color { theme(dark).activeSurface }
     /// A selected destination in the rail (gold-tinted, matching the Journal list selection).
-    static func selected(_ dark: Bool) -> Color { dark ? gold.opacity(0.20) : Color(rhemionHex: 0xF6DD84) }
+    static func selected(_ dark: Bool) -> Color { theme(dark).selected }
+    /// An empty checkbox's edge: 3:1 against the page.
+    static func checkboxEdge(_ dark: Bool) -> Color { theme(dark).checkboxEdge }
+    // AppKit text views (the Journal transcript) take NSColor.
+    static func nsText(_ dark: Bool) -> NSColor { theme(dark).nsText }
+    static func nsTextSelection(_ dark: Bool) -> NSColor { theme(dark).nsTextSelection }
 
     /// The exact bundled Mulish face per weight (no SwiftUI weight synthesis, which renders heavier than
     /// the design). Falls back to the native system font if the face isn't registered.
@@ -62,11 +205,18 @@ extension View {
                     .fill(RhemionStyle.activeSurface(dark))
                     .overlay {
                         RoundedRectangle(cornerRadius: radius)
-                            .strokeBorder(dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12), lineWidth: 0.5)
+                            .strokeBorder(RhemionStyle.theme(dark).edge, lineWidth: 0.5)
                     }
-                    .shadow(color: .black.opacity(dark ? 0.28 : 0.14), radius: 2, y: 1)
+                    .themeShadow(RhemionStyle.theme(dark).tileShadow)
             }
         }
+    }
+}
+
+extension NSColor {
+    convenience init(rhemionHex hex: UInt32) {
+        self.init(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255,
+                  blue: CGFloat(hex & 255) / 255, alpha: 1)
     }
 }
 
@@ -78,7 +228,7 @@ extension Color {
     }
 }
 
-/// THE text link (DESIGN.md) — one style app-wide: gold text like "Restore defaults" (Mulish 12.5
+/// THE text link — one style app-wide: gold text like "Restore defaults" (Mulish 12.5
 /// regular), an optional SF icon, no background, border or underline; hover dims it (0.75); disabled
 /// reads tertiary. `danger: true` swaps the ink to `RhemionStyle.danger` (Uninstall, Delete exported
 /// transcripts…).
@@ -86,6 +236,8 @@ struct TextLink: View {
     let title: String
     var systemImage: String? = nil
     var danger = false
+    /// 12.5 on its own; inside a caption it takes the caption's size (11), so it sits on the same line.
+    var size: CGFloat = 12.5
     let action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var scheme
@@ -95,7 +247,7 @@ struct TextLink: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let systemImage { Image(systemName: systemImage).font(.system(size: 11, weight: .regular)) }
-                Text(title).font(RhemionStyle.font(12.5, .regular))
+                Text(title).font(RhemionStyle.font(size, .regular))
             }
             .foregroundStyle(!isEnabled ? RhemionStyle.tertiary(scheme == .dark) : danger ? RhemionStyle.danger : RhemionStyle.gold)
             .opacity(isEnabled && hover ? 0.75 : 1)
@@ -104,6 +256,115 @@ struct TextLink: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .fixedSize()
+    }
+}
+
+// MARK: - Quiet action
+
+/// The one Quiet action rule (design: no surface in any state, state carried by ink). Rest `secondary` (or
+/// `danger`), hover `text` (danger: 75 %), pressed 60 % at once; 0.12 s ease-out on hover, none under Reduce
+/// Motion. Used by About › Copy, Journal › Delete and the table's Manage / Download.
+struct QuietActionStyle: ButtonStyle {
+    let dark: Bool
+    var danger: Bool = false
+    /// The status trigger ("✓ In use ⌄"): `success` ink at rest and under the pointer (75 %), pressed 60 %.
+    var status: Bool = false
+    func makeBody(configuration: Configuration) -> some View {
+        QuietActionBody(configuration: configuration, dark: dark, danger: danger, status: status)
+    }
+}
+
+private struct QuietActionBody: View {
+    let configuration: ButtonStyleConfiguration
+    let dark: Bool
+    let danger: Bool
+    let status: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hover = false
+    private var ink: Color {
+        if !isEnabled { return RhemionStyle.tertiary(dark) }
+        if danger { return RhemionStyle.danger }
+        if status { return RhemionStyle.success }
+        return hover ? RhemionStyle.text(dark) : RhemionStyle.secondary(dark)
+    }
+    var body: some View {
+        configuration.label
+            .foregroundStyle(ink)
+            .opacity(configuration.isPressed ? 0.6 : ((danger || status) && hover ? 0.75 : 1))
+            .contentShape(Rectangle())
+            .animation(reduceMotion || configuration.isPressed ? nil : .easeOut(duration: 0.12), value: hover)
+            .onHover { hover = $0 }
+    }
+}
+
+/// Primary: the one recommended next step of a screen. Mulish 13 SemiBold, padding 18 × 9,
+/// radius 9, the theme's primary fill, ink, edge and shadow. Hugs its label.
+struct PrimaryButton: View {
+    let title: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        let theme = RhemionStyle.theme(scheme == .dark)
+        Button(action: action) {
+            Text(title).font(RhemionStyle.font(13, .semibold))
+                .foregroundStyle(theme.primaryInk)
+                .padding(.horizontal, 18).padding(.vertical, 9)
+                .background(theme.primaryFill, in: RoundedRectangle(cornerRadius: 9))
+                .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(theme.primaryEdge, lineWidth: 1) }
+                .themeShadow(theme.primaryShadow)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The search field, in two places with two jobs:
+/// `.toolbar`: a window's toolbar (the Journal) on the `rail` ground: `content` fill, no edge, system type,
+///   130–250 wide; the clear button follows the text.
+/// `.card`: inside a card or popover (Models): `win` fill, a 1 pt `line` edge, 30 tall, Mulish 13, a quiet
+///   clear button; it takes the focus when the card opens.
+struct SearchField: View {
+    enum Style { case toolbar, card }
+    @Binding var text: String
+    let placeholder: String
+    let style: Style
+    @Environment(\.colorScheme) private var scheme
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let theme = RhemionStyle.theme(scheme == .dark)
+        switch style {
+        case .toolbar:
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass").foregroundStyle(theme.secondary)
+                TextField(placeholder, text: $text).textFieldStyle(.plain)
+                if !text.isEmpty { Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }.help("Clear search") }
+            }.padding(7).frame(minWidth: 130, maxWidth: 250).background(theme.content, in: RoundedRectangle(cornerRadius: 7))
+        case .card:
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(theme.secondary)
+                TextField(placeholder, text: $text).textFieldStyle(.plain).font(RhemionStyle.font(13)).focused($focused)
+                if !text.isEmpty {
+                    Button { text = "" } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(theme.tertiary)
+                    }
+                    .buttonStyle(.plain).help("Clear search").accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 9).frame(height: 30)
+            .background(theme.win, in: RoundedRectangle(cornerRadius: 7))
+            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(theme.line, lineWidth: 1) }
+            .onAppear { focused = true }
+        }
+    }
+}
+
+extension View {
+    /// A card's surface (popovers, the language list, the Models cards): `win`, radius 12, a 0.5 pt `line` edge.
+    /// Menus add their 6 pt inset on top (`menuCard`); the operation pop-up has its own (`OperationPopupCard`).
+    func cardSurface(dark: Bool) -> some View {
+        background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
     }
 }
 
@@ -116,6 +377,12 @@ struct MenuRow: View {
     let title: String
     let checked: Bool
     let dark: Bool
+    /// A row that cannot be picked here (e.g. a dictation key another row already uses): `tertiary`, no hover,
+    /// with `note` ("In use") on the right.
+    var note: String? = nil
+    var enabled: Bool = true
+    /// A destructive item (Remove): `danger` ink; under the pointer it turns gold with white text like any row.
+    var danger: Bool = false
     let action: () -> Void
     @State private var hover = false
 
@@ -125,14 +392,20 @@ struct MenuRow: View {
                 Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).opacity(checked ? 1 : 0).frame(width: 20)
                 Text(title).font(RhemionStyle.font(13)).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 8)
+                // Under the pointer the whole row turns white on gold, the note too (a grey note vanishes on gold).
+                if let note {
+                    Text(note).font(RhemionStyle.font(11))
+                        .foregroundStyle(hover && enabled ? RhemionStyle.theme(dark).onAccent : RhemionStyle.tertiary(dark))
+                }
             }
             .padding(.vertical, 5).padding(.trailing, 8).frame(minHeight: 28).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(hover ? Color.white : RhemionStyle.text(dark))
-        .background(hover ? RhemionStyle.gold : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .disabled(!enabled)
+        .foregroundStyle(!enabled ? RhemionStyle.tertiary(dark) : hover ? RhemionStyle.theme(dark).onAccent : danger ? RhemionStyle.danger : RhemionStyle.text(dark))
+        .background(hover && enabled ? RhemionStyle.gold : .clear, in: RoundedRectangle(cornerRadius: 6))
         .onHover { hover = $0 }
-        .help(title)
+        .help(note.map { "\(title): \($0)" } ?? title)
     }
 }
 
@@ -141,18 +414,17 @@ extension View {
     /// `shadow`: false when the hosting panel draws the native window shadow, true when drawn inside a window.
     func menuCard(dark: Bool, shadow: Bool) -> some View {
         self.padding(6)
-            .background(RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 12))
-            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(shadow ? (dark ? 0.44 : 0.22) : 0), radius: 17, y: 12)
+            .cardSurface(dark: dark)
+            .themeShadow(shadow ? RhemionStyle.theme(dark).menuShadow : .init(color: .clear, radius: 17, y: 12))
     }
 }
 
 // MARK: - Window layout
 
-/// THE layout standard of every two-column app window (DESIGN.md "Window layout"): taken from the
+/// THE layout standard of every two-column app window: taken from the
 /// Uninstall (farewell) window and reused by Clear Data — a recessed side column (logo, title, subtitle,
 /// optional figures, a quiet hint pinned to the bottom) and a main column with the same margins on every
-/// screen. Welcome is the hero exception (bigger logo/title, see DESIGN.md). Plain sheets (export deletion)
+/// screen. Welcome is the hero exception (bigger logo and title). Plain sheets (export deletion)
 /// use the main-column margins only.
 enum WindowLayout {
     /// Side column width.
@@ -179,12 +451,12 @@ enum WindowLayout {
     static let stepGap: CGFloat = 12
     /// Title of a step / result screen in the main column.
     static var stepTitleFont: Font { RhemionStyle.font(15, .semibold) }
-    /// Between the buttons of a button row (right-aligned; Raised R1 buttons are 30 pt tall).
+    /// Between the buttons of a button row (right-aligned; raised buttons are 30 pt tall).
     static let buttonSpacing: CGFloat = 8
     /// The window is never shorter than this — the side column always has room for its content.
     static let minHeight: CGFloat = 330
 
-    // The operation pop-up (DESIGN.md "Operation pop-up"): a compact borderless panel over its window.
+    // The operation pop-up: a compact borderless panel over its window.
     /// Pop-up width; its height is its content.
     static let popupWidth: CGFloat = 400
     /// Pop-up padding: top / sides / bottom (the button row's bottom and right margins).

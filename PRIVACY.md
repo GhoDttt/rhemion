@@ -13,10 +13,12 @@ Rhemion is built so that what you say stays on your Mac.
 
 | Data | Location | Removed by |
 |---|---|---|
-| Settings and dictionary | `~/.local/state/rhemion-v3/active/` | Clear Data, Uninstall |
+| Settings and dictionary, with the dictionary's previous version | `~/.local/state/rhemion-v3/active/` | Clear Data, Uninstall |
 | Journal: transcripts | `~/.local/state/rhemion-v3/log/` | Clear Data, Uninstall, Journal cleanup |
+| Journal: a copy for opening it quickly, and its marks | `~/.local/state/rhemion-v3/journal-cache/` (holds the transcripts, readable only by you), `journal-marks.json` and `journal-inserted-again.json` in `~/.local/state/rhemion-v3/` | Kept in step with the journal; Clear Data, Uninstall |
 | Journal: audio | `~/Library/Application Support/Rhemion/history/` | Clear Data, Uninstall, Journal cleanup |
-| Speech model | `~/Library/Application Support/FluidAudio/Models/parakeet-tdt-0.6b-v3/` | Clear Data, Uninstall (your choice) |
+| Speech models | Parakeet: `~/Library/Application Support/FluidAudio/Models/`. Whisper and Qwen3-ASR: `~/.local/share/whisper/`. Model files you put in a folder you added stay where you put them. | Settings › Models › Remove, Clear Data, Uninstall (your choice) |
+| Apple Speech language packs | Kept by macOS for Rhemion while you use Apple Speech | Uninstall gives them back, so macOS can remove packs no other app uses |
 | Logs | `~/.local/state/rhemion-v3/app.log`, `runtime.log` (kept 7 days, 15 MB at most) | Automatically; Clear Data, Uninstall |
 | Caches | `~/Library/Caches/` and the temporary folder, under Rhemion's names | Clear Data, Uninstall |
 | Exported transcripts | A folder you choose. Export is off until you turn it on and pick the folder. | Only if you ask: Settings › Journal › Export, or Clear Data |
@@ -25,8 +27,10 @@ Logs record technical events: start and stop, timings, text length in bytes, mic
 
 ## Network
 
-- Rhemion goes online only to download the speech model, when you ask for it in the Welcome window or in Settings › Audio & Model. By default the model comes from Hugging Face (`huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml`), which sees the request like any download (IP address, time).
+- Rhemion goes online only to download a speech model, when you ask for it in the Welcome window or in Settings › Models. The models come from Hugging Face, which sees the request like any download (IP address, time): Parakeet from `huggingface.co/FluidInference`, Whisper from `huggingface.co/ggerganov/whisper.cpp`, Qwen3-ASR from `huggingface.co/handy-computer`. Each file is checked against its published fingerprint (SHA-256) before it is used.
+- Apple Speech is part of macOS. When you choose it, macOS may download the language pack from Apple.
 - Recognition works offline.
+- Whisper, Qwen3-ASR and any model file you add run in a separate helper inside a macOS sandbox: it cannot connect to the network, cannot write files, and of your files can read only the model and the recording it is turning into text. A damaged or hostile model file has nothing to send and no way to send it.
 - Rhemion has no analytics, crash reporting, telemetry, account or update check.
 
 ## Permissions

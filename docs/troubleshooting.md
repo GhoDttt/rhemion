@@ -33,7 +33,7 @@ The download was probably corrupted, or unpacked by a tool that broke the signat
 ## Empty transcripts, or nothing is recognized
 
 - **Microphone** must be on: System Settings › Privacy & Security › Microphone. Rhemion may appear there twice, as Rhemion and as `rhemion-runtime`, its built-in helper that records the audio. Both should be on.
-- Check the microphone in Settings › Audio & Model › **Microphone**.
+- Check the microphone in Settings › Audio › **Microphone**.
 
 ## Permissions are on, but Rhemion acts as if they are not
 
@@ -47,7 +47,7 @@ tccutil reset Microphone com.sageathor.rhemion.runtime
 
 ## The model download is stuck
 
-Check the internet connection and press **Retry** in the Welcome window or in Settings › Audio & Model › **Speech model (Parakeet)**. The download is about 460 MB.
+Check the internet connection and press **Retry** in the Welcome window, or **Download** again in the model's row in Settings › Models. The default model is about 630 MB.
 
 ## Reporting a problem
 

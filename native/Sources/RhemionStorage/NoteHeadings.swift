@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// The words in the week and day headings of the history and export notes. They follow the Mac's
@@ -25,7 +28,7 @@ public struct NoteHeadings: Sendable, Equatable {
 
     func weekHeading(_ week: Int) -> String { "## \(self.week) \(week)" }
 
-    /// "### понедельник 05.10.2026" (Russian) or "### Monday 2026-10-05" (English, unambiguous order).
+    /// "### <Russian weekday> 05.10.2026" (Russian) or "### Monday 2026-10-05" (English, unambiguous order).
     func dayHeading(weekday: Int, day: DateComponents) -> String {
         let name = weekdays[weekday - 1]
         return russianDates

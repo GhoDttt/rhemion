@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Deleting exported transcripts lives with the export setting (Settings › Journal ›
 // Export): a quiet "Delete exported transcripts…" action under the Export folder field, and a question
 // when export is switched Off while Rhemion still owns files there. Both lead to one confirmation sheet
@@ -158,8 +161,8 @@ struct ExportDeleteLink: View {
     }
 }
 
-/// The sheet. App controls only (DESIGN.md): Cancel / Keep are Raised R1, the destructive actions are
-/// Raised R1 with danger-red text, the folder is the shared `FolderView`; both questions use the
+/// The sheet. App controls only: Cancel / Keep are raised, the destructive actions are
+/// raised with danger-red text, the folder is the shared `FolderView`; both questions use the
 /// "Deletes / Stays" columns (`ChangeColumns`).
 struct ExportDeleteSheet: View {
     @ObservedObject var model: ExportDeleteSheetModel
@@ -184,7 +187,7 @@ struct ExportDeleteSheet: View {
             case .stuck(let message):    StuckContent(message: message, dark: dark)
             }
         }
-        .padding(WindowLayout.mainPadding)   // the standard main-column margins (DESIGN.md "Window layout")
+        .padding(WindowLayout.mainPadding)   // the standard main-column margins
         .frame(width: 440)
         .onExitCommand {
             switch model.phase {

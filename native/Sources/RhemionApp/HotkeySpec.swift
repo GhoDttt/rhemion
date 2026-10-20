@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // HotkeySpec — the single source of truth for global-hotkey chord strings ("cmd+option+r"), shared by
 // RecallHotkey (Carbon registration) and the settings recorder (capture NSEvent → spec, and pretty
 // display). Keeping parse, key-code mapping, and formatting here means the recorder can only ever

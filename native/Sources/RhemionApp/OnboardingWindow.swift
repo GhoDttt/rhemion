@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Welcome & Setup — the one-time first-run screen. It focuses on the two make-or-break
 // permissions (Accessibility for the push-to-talk key + text insertion; Microphone for capture), shows
 // their live status with buttons that jump to the right System Settings pane, and a short "how to
@@ -7,6 +10,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import RhemionCore
 import SwiftUI
 
 /// Owns the single Welcome window and the "already shown" flag. `current` reads the live settings (for the
@@ -50,10 +54,11 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                                       logoClock: logoClock,
                                       initialPTTKey: current().pttKeys.first ?? AppSettings().pttKeys.first ?? "right_cmd",
                                       initialLaunchAtLogin: current().launchAtLogin,
+                                      languages: current().dictationLanguages,
                                       setPTTKey: setPTTKey,
                                       setLaunchAtLogin: setLaunchAtLogin,
                                       onDone: { [weak self] in self?.window?.close() })
-            let hosting = NSHostingController(rootView: root)
+            let hosting = NSHostingController(rootView: root.themedRoot())
             // Size the window to the content's own fitting size (the view sets a fixed 800pt width), so the
             // Welcome shows in full without a scroll bar.
             hosting.sizingOptions = [.preferredContentSize]
@@ -151,6 +156,8 @@ struct OnboardingView: View {
     let setPTTKey: (String) -> Void
     let setLaunchAtLogin: (Bool) -> Void
     let onDone: () -> Void
+    /// The dictation languages, taken from the Mac's preferred languages on first run; named in the Speech model row.
+    let languages: [String]
     /// The dictation key, seeded from the current setting and updated as the user picks Fn / Right Command.
     @State private var pttKey: String
     /// Launch-at-login, seeded from the current setting; the toggle writes it live (persist + reconcile).
@@ -158,7 +165,7 @@ struct OnboardingView: View {
     @Environment(\.colorScheme) private var scheme
 
     init(permissions: PermissionsModel, modelDownload: ModelDownloadModel, logoClock: WelcomeLogoClock, initialPTTKey: String,
-         initialLaunchAtLogin: Bool, setPTTKey: @escaping (String) -> Void,
+         initialLaunchAtLogin: Bool, languages: [String] = [], setPTTKey: @escaping (String) -> Void,
          setLaunchAtLogin: @escaping (Bool) -> Void, onDone: @escaping () -> Void) {
         self.permissions = permissions
         self.modelDownload = modelDownload
@@ -166,6 +173,7 @@ struct OnboardingView: View {
         self.setPTTKey = setPTTKey
         self.setLaunchAtLogin = setLaunchAtLogin
         self.onDone = onDone
+        self.languages = languages
         _pttKey = State(initialValue: initialPTTKey)
         _launchAtLogin = State(initialValue: initialLaunchAtLogin)
     }
@@ -235,10 +243,10 @@ struct OnboardingView: View {
         switch modelDownload.phase {
         case .missing:
             skipLink
-            primaryButton("Download model · ~\(modelDownload.approxSizeMB) MB") { modelDownload.onDownload() }
+            primaryButton(modelDownload.isApple ? "Set up Apple Speech" : "Download model · ~\(modelDownload.approxSizeMB) MB") { modelDownload.onDownload() }
         case .failed:
             skipLink
-            primaryButton("Retry download · ~\(modelDownload.approxSizeMB) MB") { modelDownload.onDownload() }
+            primaryButton(modelDownload.isApple ? "Set up Apple Speech" : "Retry download · ~\(modelDownload.approxSizeMB) MB") { modelDownload.onDownload() }
         case .downloading, .preparing, .checking:
             primaryButton("Continue in background") { onDone() }
         case .ready:
@@ -250,21 +258,13 @@ struct OnboardingView: View {
         }
     }
 
-    /// Primary tier (DESIGN.md → F2 "Selection Gold"): the one warm button per screen — the exact selection
+    /// Primary button: the one warm button per screen — the exact selection
     /// color (#F6DD84 / gold 20%) + a thin gold hairline + dark-amber ink (cream on dark). Not a saturated slab.
     private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(RhemionStyle.font(13, .semibold))
-                .foregroundStyle(dark ? Color(rhemionHex: 0xE8D9A8) : Color(rhemionHex: 0x5A4410))
-                .padding(.horizontal, 18).padding(.vertical, 9)
-                .background(RhemionStyle.selected(dark), in: RoundedRectangle(cornerRadius: 9))
-                .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(RhemionStyle.gold.opacity(dark ? 0.42 : 0.35), lineWidth: 1) }
-                .shadow(color: .black.opacity(dark ? 0.20 : 0.05), radius: 1.5, y: 1)
-        }
-        .buttonStyle(.plain)
+        PrimaryButton(title: title, action: action)
     }
 
-    /// Quiet tier (DESIGN.md): plain text link, no fill — lets the user proceed without the model now.
+    /// Quiet tier: plain text link, no fill — lets the user proceed without the model now.
     private var skipLink: some View {
         Button(action: onDone) {
             Text("Skip for now").font(RhemionStyle.font(12, .medium))
@@ -328,7 +328,7 @@ struct OnboardingView: View {
                     Text("Speech model").font(RhemionStyle.font(13, .semibold))
                     modelStatusPill
                 }
-                Text("The on-device recognition engine, ~\(modelDownload.approxSizeMB) MB, downloaded once. Works offline; audio never leaves your Mac.")
+                Text(modelCaption)
                     .font(RhemionStyle.font(12)).lineSpacing(2)
                     .foregroundStyle(RhemionStyle.secondary(dark))
                     .fixedSize(horizontal: false, vertical: true)
@@ -343,6 +343,24 @@ struct OnboardingView: View {
             Spacer(minLength: 0)
         }
         .padding(16)
+    }
+
+    /// The model line, e.g. "Parakeet Ultra for the languages on your Mac: Russian, Ukrainian and English. One
+    /// download of 632 MB, then it works offline." A language the model doesn't know is named, so nobody is promised it.
+    private var modelCaption: String {
+        let model = ModelCatalog.model(id: modelDownload.modelID)
+        let name = model?.name ?? "The speech model"
+        let covered = languages.filter { model?.languages.contains($0) ?? false }
+        let missing = languages.filter { !covered.contains($0) }
+        let size = modelDownload.isApple ? "Built into macOS, which may fetch the language first."
+            : "One download of \(modelDownload.approxSizeMB) MB, then it works offline."
+        if covered.isEmpty { return "\(name). \(size)" }
+        if missing.isEmpty {
+            let one = covered.count == 1
+            return "\(name) for the \(one ? "language" : "languages") on your Mac: \(LanguageNames.summary(covered)). \(size)"
+        }
+        let gap = LanguageNames.and(missing) + (missing.count == 1 ? " isn't" : " aren't") + " supported yet."
+        return "\(name) for \(LanguageNames.summary(covered)), the languages on your Mac it knows. \(gap) \(size)"
     }
 
     private var modelStatusPill: some View {
@@ -408,8 +426,14 @@ struct OnboardingView: View {
                 Spacer(minLength: 8)
                 keyChooser.frame(width: 250)
             }
+            if pttKey == "fn", let conflict = GlobeKey.conflict {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("The Globe key also \(conflict).").font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.secondary(dark))
+                    TextLink(title: "Set it to Do Nothing ›", size: 11, action: GlobeKey.openKeyboardSettings)
+                }
+            }
             if !keyChoices.contains(where: { $0.id == pttKey }) {
-                Text("Currently using \(Self.pttLabel(pttKey)). Pick one to change it; add more keys in Settings › General.")
+                Text("Currently using \(Self.pttLabel(pttKey)). Pick one to change it; add more keys in Settings › Shortcuts.")
                     .font(RhemionStyle.font(11)).foregroundStyle(RhemionStyle.tertiary(dark))
                     .fixedSize(horizontal: false, vertical: true)
             }

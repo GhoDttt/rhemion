@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Native Accessibility delivery.  The status split is deliberately conservative: after the
 // AXSelectedText setter is called, every ambiguous outcome is "submitted-unverified" so a caller
 // can never paste the same text a second time.
@@ -114,15 +117,20 @@ enum AXInsert {
         if let targetPid, frontmostPid != targetPid {
             return Classification(boundary: .targetChanged, isWeb: false)
         }
+        // A browser's fields are web fields by the app itself: the ancestor walk below depends on Chrome
+        // handing over its whole accessibility tree, which it sometimes does not while a page re-renders.
+        // A web field taken for a native one gets the AX write first, which Chrome ignores, and the paste
+        // right after it was then lost (Chrome, a CRM comment field: every miss took that path).
+        let browser = isBrowser(pid: frontmostPid)
         guard let element = focusedElement() else {
-            return Classification(boundary: .unknown, isWeb: false)
+            return Classification(boundary: .unknown, isWeb: browser)
         }
         guard !isSecure(element) else {
             return Classification(boundary: .blockedSecure, isWeb: false)
         }
 
         let tw = DispatchTime.now().uptimeNanoseconds
-        let web = hasWebAreaAncestor(element)
+        let web = browser || hasWebAreaAncestor(element)
         tick("web", since: tw)
         switch characterLeftOfCaret(element) {
         case .readable(let left):
@@ -189,6 +197,35 @@ enum AXInsert {
         }
         return .readable(string)
     }
+
+    /// Browsers by bundle id. Electron apps (VSCodium, Obsidian, Slack) are not here: they keep the walk.
+    static let browserBundleIDs: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "org.chromium.Chromium", "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+        "company.thebrowser.Browser", "com.microsoft.edgemac", "com.brave.Browser", "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera", "org.mozilla.firefox", "app.zen-browser.zen",
+    ]
+
+    static func isBrowser(pid: Int) -> Bool {
+        guard let id = NSRunningApplication(processIdentifier: pid_t(pid))?.bundleIdentifier else { return false }
+        return browserBundleIDs.contains(id)
+    }
+
+    /// Chromium underneath: its browsers (not Safari or Firefox) and Electron apps, whose paste comes from the
+    /// same Blink code (Delivery repeats a ⌘V that Chromium dropped).
+    static func isChromium(pid: Int) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid_t(pid)), let id = app.bundleIdentifier else { return false }
+        if chromiumBundleIDs.contains(id) { return true }
+        guard let bundle = app.bundleURL else { return false }
+        let electron = bundle.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: electron.path)
+    }
+
+    static let chromiumBundleIDs: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "org.chromium.Chromium", "company.thebrowser.Browser", "com.microsoft.edgemac", "com.brave.Browser",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
+    ]
 
     private static func hasWebAreaAncestor(_ element: AXUIElement) -> Bool {
         var current: AXUIElement? = element

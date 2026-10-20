@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Single instance — only one Rhemion per bundle id runs at a time. Two would share one state folder,
 // socket and runtime (each start kills the other's runtime as an "orphan"), so a second launch — the
 // daily app and a dry-run test build alike, they share the bundle id — hands over to the one already

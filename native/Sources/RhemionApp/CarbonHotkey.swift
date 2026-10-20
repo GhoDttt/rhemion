@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // CarbonHotkey — one global hotkey registered via Carbon RegisterEventHotKey, which keeps firing under
 // macOS Secure Keyboard Entry (where a CGEventTap never sees letter key-downs). Multiple global
 // hotkeys (recall, dict-add, …) share ONE event handler installed once by CarbonHotkeyDispatcher; the

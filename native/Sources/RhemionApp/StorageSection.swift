@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // The Storage section of Settings › Advanced (last section) — read-only sizes per category, each with a
 // one-line hint (computed off the main thread, since walking the file tree can be slow), plus "Clear
 // Data…" (the Clear Data window) and "Uninstall…" as setting rows in a second card.
@@ -51,7 +54,7 @@ struct StorageSection: View {
     }
 
     var body: some View {
-        Section {
+        FlatSection {
             row("Models", "Speech recognition models Rhemion uses. Some may be shared with other apps.", model.sizes?.models)
             row("Recordings", "Audio of your dictations, for playback in the Journal.", model.sizes?.recordings)
             row("Transcripts & Dictionary", "Your Journal text and word replacements.", model.sizes?.transcripts)
@@ -64,7 +67,7 @@ struct StorageSection: View {
             Text("Storage").font(RhemionStyle.font(13, .bold)).foregroundStyle(RhemionStyle.text(dark)).textCase(nil)
         }
         // A second card (its own Section): the two actions as setting rows, like "Application log".
-        Section {
+        FlatSection {
             actionRow("Clear data", "Free up space or erase your data. You choose what goes.") {
                 RaisedButton(title: "Clear Data…", action: onClearData)
             }
@@ -102,13 +105,17 @@ struct StorageSection: View {
     }
 }
 
-/// Raised R1 button (DESIGN.md) — the exact treatment of the Journal's `JournalActionButton` (a raised
+/// raised button — the exact treatment of the Journal's `JournalActionButton` (a raised
 /// win pill + hairline border + a soft shadow, hover shifts the fill), but title-only (no leading icon).
-/// `danger: true` keeps the neutral Raised R1 surface but swaps the label to the danger-red ink (the
+/// `danger: true` keeps the neutral raised surface but swaps the label to the danger-red ink (the
 /// destructive confirm action of a sheet, e.g. "Delete…") — no separate button type for this.
 struct RaisedButton: View {
     let title: String
     var danger: Bool = false
+    /// An optional leading SF symbol (11 SemiBold, 6 pt gap), as Copy in the Journal.
+    var systemImage: String? = nil
+    /// A leading glyph that is not an SF symbol (Insert again's own icon); wins over `systemImage`.
+    var icon: AnyView? = nil
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
     // `.disabled(...)` from a caller (e.g. the export-delete confirm's 0.5s guard) sets
@@ -120,12 +127,15 @@ struct RaisedButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title).font(RhemionStyle.font(12, .medium))
+            HStack(spacing: 6) {
+                if let icon { icon } else if let systemImage { Image(systemName: systemImage).font(.system(size: 11, weight: .semibold)) }
+                Text(title).font(RhemionStyle.font(12, .medium))
+            }
                 .foregroundStyle(danger ? RhemionStyle.danger : RhemionStyle.text(dark))
                 .padding(.horizontal, 12).padding(.vertical, 7)
                 .background(hover && isEnabled ? RhemionStyle.hover(dark) : RhemionStyle.win(dark), in: RoundedRectangle(cornerRadius: 8))
                 .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
+                .themeShadow(RhemionStyle.theme(dark).raisedShadow)
                 .opacity(isEnabled ? 1 : 0.45)
         }.buttonStyle(.plain).onHover { hover = $0 }
     }

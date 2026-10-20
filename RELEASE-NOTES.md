@@ -19,13 +19,44 @@ Rules:
 - Newest version first. The heading line is exactly the one shown in the format above, with an em dash between version and date.
 - Sections only from the list above, in that order: New, Improvements, Settings, Fixes, Under the hood. Omit empty ones.
 - One bullet = one sentence. An optional area prefix is allowed ("Settings: ...", "Journal: ...", "Dictionary: ...", "Clear Data: ...", "Uninstall: ...").
-- 4 to 12 bullets per version, the most noticeable first.
+- As many bullets as there are changes the person notices, the most noticeable first. Nothing that was not done.
 - Keep private paths, names of other apps and personal data out.
 - The top entry must match the VERSION file. Tag v<version> only after the release is verified.
 -->
 
 
 # Rhemion release notes
+
+## 3.2.0 — 2026-10-20
+
+### New
+- Settings › Models: pick the languages you dictate in, and Rhemion recommends the model that suits them and lists the rest from the best to the weakest, with speed and accuracy scores from its own tests.
+- Three speech models to choose from: Parakeet Ultra, now the default and more accurate than before, Whisper Large v3 Turbo for 99 languages, and Qwen3-ASR, which tells the language of each dictation by itself; Apple Speech, built into macOS, can be used too.
+- Model files you already have appear in Settings › Models under their own names, with the languages they know, once their folder is added.
+
+### Improvements
+- The Welcome window downloads the model recommended for your languages and names it, with the languages it is for.
+- Settings is calmer: no cards, Models and Audio are separate sections, and Restore defaults lives only in Shortcuts and Recording, with Undo.
+- Fn (Globe) can be the dictation key again, and Rhemion tells you when the Globe key still starts Apple Dictation.
+- A dictation key pressed as part of a shortcut no longer starts a dictation, and a shortcut already used by another action can't be recorded twice.
+- Esc twice now also works in apps where a single Esc does something.
+- Dictionary: Add to Dictionary fixes the word in browsers and web-based apps too.
+- Journal: a long journal opens, searches and deletes entries in a fraction of a second instead of several seconds.
+- If you press ⌘V yourself while a dictation is still on the clipboard, you get your own clipboard content, not the dictation.
+- About: What's New sits with the other links at the bottom, and Licenses & Notices, beside the copyright, opens the notices of Rhemion and the models it uses inside the app, without a connection.
+- VoiceOver reads a model's speed and accuracy scores as they are shown.
+
+### Fixes
+- Chrome 155 and other Chromium-based apps no longer lose about two of every three pastes; Rhemion pastes again only when the field stayed exactly as it was.
+- In a browser, a dictation that did not land in an empty field is marked Not inserted in the Journal instead of being counted as inserted.
+- A Journal file that can't be read is no longer taken for an empty one, so no recordings or entries are removed because of it.
+- A dictionary file that can't be read is never written over: Rhemion shows the version saved before it, says so, and keeps the unreadable file beside the new one.
+- A stray "<unk>" marker no longer appears in the dictated text.
+- Clear Data and Uninstall now remove the new models, their interrupted downloads and caches, and Uninstall gives Apple Speech language packs back to macOS.
+
+### Under the hood
+- Whisper, Qwen3-ASR and model files you add run in a separate helper that macOS keeps off the network and away from your files.
+- From this version Rhemion is licensed under the Mozilla Public License 2.0; versions 3.0 to 3.1 stay under MIT.
 
 ## 3.1.1 — 2026-10-14
 

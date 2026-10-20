@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Shared helpers of the app target: the privacy-safe event label, the delivery-status test, a lock box for
 // cross-thread values, and the app log (moved out of main.swift unchanged).
 

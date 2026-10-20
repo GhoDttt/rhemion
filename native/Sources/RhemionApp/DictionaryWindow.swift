@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Dictionary — the personal word-replacement editor. It is a destination inside the hub:
 // HubModel owns a DictionaryModel and the hub renders HubDictionaryPane. There is no standalone window.
 //
@@ -15,8 +18,12 @@ import SwiftUI
 /// hub may be open — without reloading, the next in-place edit would save a stale snapshot back).
 @MainActor
 final class DictionaryModel: ObservableObject {
-    @Published var doc = DictionaryStore.load()
-    func reload() { doc = DictionaryStore.load() }
+    @Published var doc: DictionaryDoc
+    /// Set when dictionary.json could not be read (see DictionaryStore.read); cleared once a save replaced it.
+    @Published private(set) var issue: DictionaryReadIssue?
+    init() { (doc, issue) = DictionaryStore.read() }
+    func reload() { (doc, issue) = DictionaryStore.read() }
+    func save(_ updated: DictionaryDoc) { if DictionaryStore.save(updated) { issue = nil } }
 }
 
 /// The Dictionary pane inside the hub, styled to the shared design system
@@ -29,7 +36,6 @@ struct HubDictionaryPane: View {
     @FocusState private var focused: UUID?
     @State private var scrollTarget: UUID?
     @State private var hovered: UUID?
-    @State private var addHover = false
     private var dark: Bool { scheme == .dark }
 
     var body: some View {
@@ -37,6 +43,7 @@ struct HubDictionaryPane: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     headerRow
+                    if let issue = model.issue { readNotice(issue) }
                     tableCard
                     note
                 }
@@ -52,7 +59,7 @@ struct HubDictionaryPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RhemionStyle.content(dark))
         // Persist on any change; DictionaryStore drops incomplete rows and the runtime hot-reloads.
-        .onChange(of: model.doc) { _, updated in DictionaryStore.save(updated) }
+        .onChange(of: model.doc) { _, updated in model.save(updated) }
     }
 
     private var headerRow: some View {
@@ -64,22 +71,18 @@ struct HubDictionaryPane: View {
             // Raised NEUTRAL pill (the app's "active = neutral-raised" language, matching the Copy/Delete
             // buttons) — priority comes from placement + the plus glyph + medium text, not from the gold
             // accent (gold is reserved for selection). Hover shifts the fill; a hairline shadow lifts it.
-            Button { addEntry() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                    Text("Add replacement").font(RhemionStyle.font(12, .medium))
-                }
-                .foregroundStyle(RhemionStyle.text(dark))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(addHover ? RhemionStyle.hover(dark) : RhemionStyle.win(dark),
-                            in: RoundedRectangle(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(RhemionStyle.line(dark), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(dark ? 0.22 : 0.06), radius: 1.5, y: 1)
-            }
-            .buttonStyle(.plain).fixedSize().help("Add a replacement")
-            .onHover { addHover = $0 }
+            RaisedButton(title: "Add replacement", systemImage: "plus") { addEntry() }
+                .fixedSize().help("Add a replacement")
         }
         .padding(.bottom, 18)
+    }
+
+    private func readNotice(_ issue: DictionaryReadIssue) -> some View {
+        Text(issue == .restoredPrevious
+             ? "The dictionary file could not be read, so this is the version saved before it. The unreadable file is kept beside it when you next change something."
+             : "The dictionary file could not be read. It is kept beside the new one when you next change something.")
+            .font(RhemionStyle.font(12)).lineSpacing(3).foregroundStyle(RhemionStyle.secondary(dark))
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 14)
     }
 
     private var tableCard: some View {

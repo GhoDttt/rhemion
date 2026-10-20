@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // RecallStore — reads the last usable dictation transcript from the history log, for the
 // recall hotkey: the runtime journals every dictation to
 // monthly JSONL logs under the state dir; this scans them newest-first (months descending, and within

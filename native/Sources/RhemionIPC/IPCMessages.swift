@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 public enum Command: Equatable, Sendable {
@@ -43,6 +46,9 @@ public enum Command: Equatable, Sendable {
     case listDevices
     case downloadModel(id: String)
     case cancelModelDownload
+    /// The user picked another model: prepare it now (load and compile), then free the one it replaces, so the
+    /// next dictation is instant and only one model holds memory. Answered by a `.devices` report once ready.
+    case useModel(id: String)
     /// 3.1: recognise a journal entry's kept recording again (a take whose recognition failed). Answered by one
     /// `.rerecognized` for the same id; the entry's text is rewritten in the journal when it succeeds.
     case rerecognize(id: String)
@@ -53,7 +59,7 @@ public enum Command: Equatable, Sendable {
 public struct ModelOption: Equatable, Sendable {
     public let id: String       // the value written to the `model` setting, e.g. "parakeet-v3"
     public let label: String    // human name for the row
-    public let engine: String   // "parakeet" | "whisper"
+    public let engine: String   // "parakeet" | "whisper" | "qwen" | "transcribe" | "apple"
     public let found: Bool      // present on disk right now (usable without a download)
     /// Loaded and compiled, ready for an instant first dictation. A freshly downloaded (or cache-cleared)
     /// model is found but not warm while the runtime prepares it, which can take tens of seconds.
@@ -61,8 +67,18 @@ public struct ModelOption: Equatable, Sendable {
     /// On disk but could not be loaded even after a retry (a broken or partial download). The app offers to
     /// download it again; the runtime then replaces the files instead of keeping them.
     public let damaged: Bool
-    public init(id: String, label: String, engine: String, found: Bool, warm: Bool = true, damaged: Bool = false) {
+    /// A local file's languages and language handling, as the file itself says (nil: the catalogue knows them).
+    public let languages: [String]?
+    /// "alphabetFilter" | "oneLanguage" | "hintOrDetect" (RhemionCore.LanguageHandling).
+    public let handling: String?
+    /// The longest dictation the model is made for, in seconds (nil: no practical limit), and whether past it the
+    /// model makes more errors (soft) or refuses the dictation.
+    public let maxSeconds: Int?
+    public let softLimit: Bool
+    public init(id: String, label: String, engine: String, found: Bool, warm: Bool = true, damaged: Bool = false,
+                languages: [String]? = nil, handling: String? = nil, maxSeconds: Int? = nil, softLimit: Bool = false) {
         self.id = id; self.label = label; self.engine = engine; self.found = found; self.warm = warm; self.damaged = damaged
+        self.languages = languages; self.handling = handling; self.maxSeconds = maxSeconds; self.softLimit = softLimit
     }
 }
 

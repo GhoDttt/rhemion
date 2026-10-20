@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // AppEffects — the real SystemEffects used by Clear Data / Uninstall outside a
 // dry run: unregisters the login item, resets TCC (Accessibility + Microphone), moves the .app to the
 // Trash, clears the saved-defaults domain, and relaunches after the old process exits. File removal

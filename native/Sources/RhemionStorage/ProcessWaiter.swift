@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // ProcessWaiter — small process-tree helpers used by RuntimeSupervisor.stopAndWait() to make
 // "stop" mean something concrete: list a process's direct children (e.g. the runtime's whisper-cli),
 // and wait until a set of pids has actually exited instead of firing a signal and hoping.

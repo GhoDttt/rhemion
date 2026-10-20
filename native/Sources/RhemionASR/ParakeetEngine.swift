@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import FluidAudio
 import Foundation
 
@@ -7,6 +10,10 @@ actor ParakeetModelHost {
     private let manager = AsrManager(config: .default)
     private let version: AsrModelVersion
     private var loadTask: Task<Void, Error>?
+    /// Calls using the model right now. The actor is reentrant at every `await`, so an unload could otherwise
+    /// free the model under a running transcription; it waits for this to reach zero instead.
+    private var inUse = 0
+    private var unloadPending = false
 
     init(version: AsrModelVersion) {
         // Privacy: the dictation runtime must NEVER reach the network. FluidAudio can otherwise
@@ -52,6 +59,8 @@ actor ParakeetModelHost {
     /// error is swallowed, so a failed prewarm simply leaves the lazy path to retry on real use
     /// (and surface the error there), exactly as before.
     @discardableResult func prewarm() async -> Bool {
+        enter()
+        defer { Task { await self.leave() } }
         do {
             try await ensureLoaded()
             // Model load alone does not compile the inference graph; one tiny silent buffer forces
@@ -71,9 +80,26 @@ actor ParakeetModelHost {
         }
     }
 
+    /// Free the model. A transcription already running finishes first (the unload waits for `inUse` to reach
+    /// zero); the next call loads again through `ensureLoaded`.
+    func unload() async {
+        guard inUse == 0 else { unloadPending = true; return }
+        unloadPending = false
+        loadTask = nil
+        await manager.cleanup()
+    }
+
+    private func enter() { inUse += 1; unloadPending = false }
+    private func leave() async {
+        inUse -= 1
+        if inUse == 0, unloadPending { await unload() }
+    }
+
     /// `language` is per-call (not stored) so one warm model instance can serve takes with
     /// different language policies; `nil` requests FluidAudio's native multilingual decode.
     func transcribe(_ samples: [Float], language: Language?) async throws -> String {
+        enter()
+        defer { Task { await self.leave() } }
         try await ensureLoaded()
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(
@@ -113,6 +139,10 @@ public struct ParakeetEngine: TranscriptionEngine {
 
     @discardableResult public func prewarm() async -> Bool {
         await host.prewarm()
+    }
+
+    public func unload() async {
+        await host.unload()
     }
 }
 

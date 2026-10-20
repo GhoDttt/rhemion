@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import Foundation
 
 /// Result of transcription from an ASR engine.
@@ -39,10 +42,14 @@ public protocol TranscriptionEngine: Sendable {
     /// startup and idempotent. Default: a no-op for engines that hold no warm state (e.g. an
     /// engine that shells out per call). Returns whether the engine is now warm.
     @discardableResult func prewarm() async -> Bool
+    /// Release the loaded model so another can take its memory (16 GB Macs can't hold two). The next
+    /// prewarm or transcription loads it again. Default: a no-op for engines that hold no warm state.
+    func unload() async
 }
 
 public extension TranscriptionEngine {
     @discardableResult func prewarm() async -> Bool { true }
+    func unload() async {}
 
     /// Convenience for language-agnostic callers (e.g. the asr-compare bench harness): builds a
     /// session with `.auto`, matching the multilingual behavior every engine had before per-take

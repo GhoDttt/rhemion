@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Speech-model provisioning — the app-side state + control for downloading the on-device
 // recognition engine (NVIDIA Parakeet via FluidAudio). The model is NOT bundled and is absent on a fresh
 // Mac, so first-run dictation would silently produce nothing; here the user downloads it explicitly (like
@@ -5,6 +8,7 @@
 // freshly-present model. Presence is read from the runtime's own `.listDevices` (`ModelOption.found`).
 
 import SwiftUI
+import RhemionCore
 import RhemionIPC
 
 @MainActor
@@ -19,12 +23,38 @@ final class ModelDownloadModel: ObservableObject {
     }
     @Published var phase: Phase = .checking
 
+    /// A download started from Settings › Models, kept apart from `phase` so fetching a second model never
+    /// marks dictation as not ready: dictation goes on with the model in use meanwhile.
+    struct Transfer: Equatable {
+        let id: String
+        var fraction: Double = 0
+        /// On disk; the runtime restarts to find it ("Preparing…" in its row until the report lists it).
+        var finished = false
+        var failed = false
+    }
+    @Published var transfer: Transfer?
+
     /// Shown when the model is on disk but cannot be loaded; Retry downloads it again, replacing the files.
     static let damagedMessage = "Speech model couldn't be loaded"
 
-    /// The default multilingual model we provision on first run.
-    let modelID = "parakeet-v3"
-    let approxSizeMB = 460
+    /// The model first run downloads: the recommendation for the Mac's languages (`ModelRecommendation`), the
+    /// default until the runtime's first report.
+    @Published var modelID = ModelCatalog.defaultID
+    var approxSizeMB: Int { Int((ModelCatalog.model(id: modelID)?.approxBytes ?? 0) / 1_000_000) }
+    /// Apple Speech has nothing to download from us: macOS fetches its language pack.
+    var isApple: Bool { modelID == AppleSpeech.modelID }
+
+    /// Follow the recommendation while nothing is on its way yet; never switch under a running download.
+    func recommend(_ id: String?) {
+        guard let id, id != modelID, transfer == nil else { return }
+        switch phase {
+        case .checking, .missing: modelID = id
+        default: break
+        }
+    }
+    /// The model the user picked (`model` setting). Readiness follows it while it is on this Mac; otherwise the
+    /// runtime falls back to the default, and so does readiness.
+    var selectedID = ModelCatalog.defaultID
 
     /// Wired by AppController to the runtime socket.
     var onDownload: () -> Void = {}
@@ -35,7 +65,11 @@ final class ModelDownloadModel: ObservableObject {
     /// Fold a `.devices` report into the phase: `found` = present on disk, `warm` = the runtime finished
     /// preparing it. Found but not warm reads as `.preparing` (a first-time compile can take a minute).
     func devicesUpdated(_ models: [ModelOption]) {
-        let option = models.first { $0.id == modelID }
+        // The model the runtime actually runs: the selected one if present, else the default, else any present
+        // model (the runtime's own fallback, `ModelRegistry.startupID`).
+        let option = models.first { $0.id == selectedID && $0.found } ?? models.first { $0.id == modelID && $0.found }
+            ?? models.first { $0.found } ?? models.first { $0.id == modelID }
+        if let t = transfer, t.finished, models.contains(where: { $0.id == t.id && $0.found }) { transfer = nil }
         let found = option?.found ?? false
         let present: Phase = !found ? .missing
             : (option?.damaged ?? false) ? .failed(Self.damagedMessage)
@@ -48,6 +82,31 @@ final class ModelDownloadModel: ObservableObject {
         case .downloading, .failed:
             break                              // don't clobber an in-flight download or a download error
         }
+    }
+
+    /// The user switched models: the runtime is preparing the new one. `.ready` arrives with its `.devices` report.
+    func switching(to id: String) {
+        selectedID = id
+        if phase == .ready { phase = .preparing }
+    }
+
+    /// Apple Speech is chosen once the runtime has its language pack (macOS keeps packs per program, so the
+    /// runtime asks for its own); the row shows the transfer meanwhile.
+    var onAppleReady: () -> Void = {}
+
+    /// Fold a runtime `.modelDownload` event for a Settings download into `transfer`. Returns false when the event
+    /// is not one (the first-run download, which drives `phase`).
+    func transferEvent(id: String, state: String, fraction: Double?) -> Bool {
+        guard transfer?.id == id else { return false }
+        switch state {
+        case "downloading": transfer?.fraction = fraction ?? transfer?.fraction ?? 0
+        case "done" where id == AppleSpeech.modelID: transfer = nil; onAppleReady()
+        case "done": transfer?.finished = true; transfer?.fraction = 1
+        case "failed": transfer?.failed = true
+        case "canceled": transfer = nil
+        default: break
+        }
+        return true
     }
 
     /// Fold a runtime `.modelDownload` event into the phase.
@@ -75,7 +134,7 @@ struct SpeechModelStatus: View {
         case .checking:
             ProgressView().controlSize(.small)
         case .missing:
-            actionButton("Download (~\(model.approxSizeMB) MB)") { model.onDownload() }
+            actionButton(model.isApple ? "Set up Apple Speech" : "Download (~\(model.approxSizeMB) MB)") { model.onDownload() }
         case .downloading(let fraction):
             HStack(spacing: 8) {
                 ProgressView(value: max(0, min(1, fraction))).frame(width: 130)

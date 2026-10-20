@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // UndoReplace — revert the last dictation's dictionary replacement in place, via a global hotkey.
 // Delivery arms UndoStore after a confirmed delivery that carried a dictionary
 // substitution; on the hotkey this deletes the corrected text with Backspace×N and pastes the

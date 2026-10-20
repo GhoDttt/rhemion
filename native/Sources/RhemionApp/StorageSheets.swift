@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Shared pieces of the storage confirmations (Settings › Advanced › Storage › Clear Data…, the export
 // deletion sheet in Settings › Journal › Export, and the Uninstall farewell window): the busy note, the
 // stuck state, the result list, the kept-files copy and the "Deletes / Stays" two-column pattern.
@@ -58,7 +61,7 @@ enum KeptFiles {
     }
 }
 
-/// The "Deletes / Stays" confirmation pattern (DESIGN.md): two rail-coloured columns side by side,
+/// The "Deletes / Stays" confirmation pattern: two rail-coloured columns side by side,
 /// each with a small-caps header; what goes is marked with a neutral (secondary) dot, what stays with a
 /// gold dot. The first question of every destructive confirmation — "will I lose anything?" — at a glance.
 struct ChangeColumns: View {
@@ -97,7 +100,7 @@ struct ChangeColumns: View {
     }
 }
 
-/// An in-window group label (DESIGN.md): small caps — uppercase, 10.5 bold, tracked, tertiary. Distinct
+/// An in-window group label: small caps — uppercase, 10.5 bold, tracked, tertiary. Distinct
 /// from a Settings section header (bold sentence case, text colour).
 struct GroupLabel: View {
     let title: String
